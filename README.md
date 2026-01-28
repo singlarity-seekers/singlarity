@@ -5,6 +5,7 @@ A Python CLI application that aggregates context from multiple developer tools (
 ## Features
 
 - **Unified Morning Brief**: Consolidated summary from all your communication and work tracking tools
+- **AI Chat with Tool Calling**: Interactive chat where AI can search, read, send, and draft emails via Gmail
 - **Context Source Configuration**: Easy setup for Gmail, Slack, JIRA, and GitHub integrations
 - **Preference Learning**: (Planned) Learns your priorities over time to improve relevance
 - **EC2 Sandbox Toggle**: (Planned) Start/stop development instances from the CLI
@@ -30,18 +31,22 @@ pip install -e ".[dev]"
 ## Quick Start
 
 ```bash
-# Configure GCP for AI features (required)
+# Configure AI (choose one):
+# Option 1: API Key (simpler)
+export DEVASSIST_AI__API_KEY=your-google-ai-api-key
+
+# Option 2: GCP Application Default Credentials
 gcloud auth application-default login
 gcloud config set project YOUR_PROJECT_ID
 
 # Add context sources (workspace directory ~/.devassist/ is created automatically)
 # Each command will prompt for required credentials interactively
 devassist config add gmail
-devassist config add slack
-devassist config add jira
-devassist config add github
 
-# Generate morning brief
+# Start AI chat (can search, read, send, draft emails)
+devassist chat
+
+# Or generate morning brief
 devassist brief
 ```
 
@@ -62,6 +67,25 @@ devassist brief --refresh
 # JSON output
 devassist brief --json
 ```
+
+### AI Chat with Tool Calling
+
+```bash
+# Start interactive chat session
+devassist chat
+
+# Chat with specific API key
+devassist chat --api-key YOUR_API_KEY
+
+# Use a different model
+devassist chat --model gemini-2.5-pro
+```
+
+The AI can interact with your Gmail using natural language:
+- "Search my unread emails"
+- "Show me emails from boss@company.com"
+- "Draft an email to john@example.com about the meeting"
+- "Reply to the latest email saying thanks"
 
 ### Configuration
 

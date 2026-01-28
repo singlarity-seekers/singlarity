@@ -87,11 +87,13 @@ def status() -> None:
 
 # Import and register sub-commands
 from devassist.cli.brief import app as brief_app
+from devassist.cli.chat import chat_app
 from devassist.cli.config import app as config_app
 
 # Register subcommands
 app.add_typer(config_app, name="config")
 app.add_typer(brief_app, name="brief")
+app.add_typer(chat_app, name="chat")
 
 
 if __name__ == "__main__":
