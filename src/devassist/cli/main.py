@@ -88,10 +88,26 @@ def status() -> None:
 # Import and register sub-commands
 from devassist.cli.brief import app as brief_app
 from devassist.cli.config import app as config_app
+from devassist.cli.prompt_commands import (
+    ask,
+    list_prompts,
+    meeting_prep,
+    pr_summary,
+    standup,
+    weekly,
+)
 
 # Register subcommands
 app.add_typer(config_app, name="config")
 app.add_typer(brief_app, name="brief")
+
+# Register prompt commands as top-level commands
+app.command(name="standup")(standup)
+app.command(name="weekly")(weekly)
+app.command(name="meeting-prep")(meeting_prep)
+app.command(name="pr-summary")(pr_summary)
+app.command(name="ask")(ask)
+app.command(name="list")(list_prompts)
 
 
 if __name__ == "__main__":

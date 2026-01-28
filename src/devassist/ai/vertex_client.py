@@ -214,3 +214,51 @@ class VertexAIClient:
             parts.append(f"Link: {item.url}")
 
         return "\n".join(parts)
+
+    async def _generate_content_with_config(
+        self,
+        prompt: str,
+        system_instruction: str,
+        temperature: float,
+        max_output_tokens: int,
+    ) -> str:
+        """Generate content with custom configuration.
+
+        This method allows prompt-specific AI configuration, enabling
+        different prompts to use different temperatures, token limits, etc.
+
+        Args:
+            prompt: User prompt text.
+            system_instruction: System prompt for AI behavior.
+            temperature: Sampling temperature (0.0-2.0).
+            max_output_tokens: Maximum response tokens.
+
+        Returns:
+            Generated text from AI model.
+
+        Raises:
+            RuntimeError: If AI libraries are not available.
+        """
+        if not VERTEX_AI_AVAILABLE:
+            return (
+                "AI generation unavailable. Please configure Vertex AI or Google AI API key."
+            )
+
+        client = self._get_client()
+
+        # Run in thread pool since google-genai may be sync
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=temperature,
+                    max_output_tokens=max_output_tokens,
+                ),
+            ),
+        )
+
+        return response.text

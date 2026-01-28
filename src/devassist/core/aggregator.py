@@ -4,6 +4,7 @@ Fetches and combines context from multiple sources.
 """
 
 import asyncio
+from datetime import datetime
 from typing import Any
 
 from devassist.adapters import get_adapter
@@ -35,6 +36,7 @@ class ContextAggregator:
         self,
         sources: list[SourceType] | None = None,
         limit_per_source: int | None = None,
+        since: datetime | None = None,
     ) -> list[ContextItem]:
         """Fetch context items from all configured sources.
 
@@ -42,6 +44,8 @@ class ContextAggregator:
             sources: Optional list of source types to fetch from.
                     If None, fetches from all configured sources.
             limit_per_source: Maximum items per source.
+            since: Optional datetime filter. Only items after this timestamp
+                   will be included.
 
         Returns:
             Combined list of context items from all sources.
@@ -77,6 +81,10 @@ class ContextAggregator:
                 self._failed_sources.append(adapter.display_name)
             elif isinstance(result, list):
                 all_items.extend(result)
+
+        # Filter by timestamp if specified
+        if since:
+            all_items = [item for item in all_items if item.timestamp >= since]
 
         return all_items
 

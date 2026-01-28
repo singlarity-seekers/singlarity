@@ -5,6 +5,12 @@ A Python CLI application that aggregates context from multiple developer tools (
 ## Features
 
 - **Unified Morning Brief**: Consolidated summary from all your communication and work tracking tools
+- **Prompt Library System**: Pre-built AI prompts for common workflows:
+  - Daily standup summaries (Yesterday/Today/Blockers)
+  - Weekly retrospectives
+  - Meeting preparation context
+  - PR activity summaries
+  - Custom ad-hoc prompts
 - **Context Source Configuration**: Easy setup for Gmail, Slack, JIRA, and GitHub integrations
 - **Preference Learning**: (Planned) Learns your priorities over time to improve relevance
 - **EC2 Sandbox Toggle**: (Planned) Start/stop development instances from the CLI
@@ -61,6 +67,32 @@ devassist brief --refresh
 
 # JSON output
 devassist brief --json
+```
+
+### Prompt-Based Commands
+
+```bash
+# Daily standup
+devassist standup
+devassist standup --json  # JSON output
+
+# Weekly retrospective
+devassist weekly
+
+# Meeting preparation
+devassist meeting-prep "Sprint Planning"
+
+# PR activity summary
+devassist pr-summary
+
+# Custom prompt with context
+devassist ask "What are the most urgent issues?"
+
+# Custom prompt without context (pure AI)
+devassist ask "Explain Python decorators" --no-context
+
+# List all available prompts
+devassist list
 ```
 
 ### Configuration

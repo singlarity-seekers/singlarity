@@ -82,6 +82,15 @@ devassist config test
 devassist brief
 devassist brief --refresh  # bypass cache
 devassist brief --json     # JSON output
+
+# Prompt-based commands
+devassist standup            # Daily standup (Yesterday/Today/Blockers)
+devassist weekly             # Weekly retrospective
+devassist meeting-prep "Sprint Planning"  # Meeting context preparation
+devassist pr-summary         # Pull request activity summary
+devassist ask "What's blocking the release?"  # Custom prompt with context
+devassist ask "Explain async/await" --no-context  # Pure AI query
+devassist list               # List all available prompts
 ```
 
 ## Architecture
@@ -291,6 +300,13 @@ See `specs/001-dev-assistant-cli/tasks.md` for detailed task tracking.
 - `devassist status` - Show configuration status
 - `devassist config add/list/remove/test` - Manage context sources (interactive setup)
 - `devassist brief` - Generate morning brief with AI summarization
+- **Prompt Library System (NEW):**
+  - `devassist standup` - Daily standup (Yesterday/Today/Blockers)
+  - `devassist weekly` - Weekly retrospective summary
+  - `devassist meeting-prep <topic>` - Meeting context preparation
+  - `devassist pr-summary` - PR activity summary
+  - `devassist ask <prompt>` - Custom prompts with optional context
+  - `devassist list` - List all available prompt templates
 
 ### Planned (Not Yet Implemented)
 - `devassist prefs` - Preference management
@@ -298,5 +314,6 @@ See `specs/001-dev-assistant-cli/tasks.md` for detailed task tracking.
 - `devassist sandbox` - EC2 instance management
 - Quarterly notes generation
 - Auto-response drafting
+- User-defined custom prompt templates (YAML-based)
 
 When documenting or discussing features, clearly distinguish between what's implemented and what's planned.

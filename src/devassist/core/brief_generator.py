@@ -10,6 +10,7 @@ from devassist.ai.vertex_client import VertexAIClient
 from devassist.core.aggregator import ContextAggregator
 from devassist.core.cache_manager import CacheManager
 from devassist.core.config_manager import ConfigManager
+from devassist.core.prompt_executor import PromptExecutor
 from devassist.core.ranker import RelevanceRanker
 from devassist.models.brief import Brief, BriefItem, BriefSection
 from devassist.models.context import ContextItem, SourceType
@@ -47,7 +48,14 @@ class BriefGenerator:
 
         self._ranker = ranker or RelevanceRanker(priority_keywords=priority_keywords)
 
-        # Initialize AI client with config
+        # Initialize PromptExecutor for AI generation
+        self._executor = PromptExecutor(
+            config_manager=self._config_manager,
+            aggregator=self._aggregator,
+            ranker=self._ranker,
+        )
+
+        # Keep AI client for backward compatibility with direct calls if needed
         self._ai_client = ai_client or VertexAIClient(
             api_key=config.ai.api_key,
             project_id=config.ai.project_id,
@@ -136,7 +144,7 @@ class BriefGenerator:
         return sections
 
     async def _generate_summary(self, items: list[ContextItem]) -> str:
-        """Generate AI summary of items.
+        """Generate AI summary of items using PromptExecutor.
 
         Args:
             items: Ranked context items.
@@ -145,7 +153,11 @@ class BriefGenerator:
             Summary string.
         """
         try:
-            return await self._ai_client.summarize(items)
+            # Use PromptExecutor with the "brief" prompt template
+            # Note: This re-fetches and re-ranks, but ensures consistency
+            # with new prompt system. For optimization, could pass items directly.
+            result = await self._executor.execute("brief", refresh=False)
+            return result.generated_text
         except Exception as e:
             # Graceful degradation when AI is unavailable
             return self._generate_fallback_summary(items, str(e))
