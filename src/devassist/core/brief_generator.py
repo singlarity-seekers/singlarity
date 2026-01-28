@@ -153,10 +153,8 @@ class BriefGenerator:
             Summary string.
         """
         try:
-            # Use PromptExecutor with the "brief" prompt template
-            # Note: This re-fetches and re-ranks, but ensures consistency
-            # with new prompt system. For optimization, could pass items directly.
-            result = await self._executor.execute("brief", refresh=False)
+            # Use PromptExecutor with pre-fetched items to avoid re-fetching
+            result = await self._executor.execute_with_items("brief", items)
             return result.generated_text
         except Exception as e:
             # Graceful degradation when AI is unavailable

@@ -13,11 +13,16 @@ from devassist.core.aggregator import ContextAggregator
 from devassist.core.config_manager import ConfigManager
 from devassist.core.ranker import RelevanceRanker
 from devassist.models.context import ContextItem
-from devassist.models.prompt import PromptExecutionResult, PromptTemplate
+from devassist.models.prompt import OutputFormat, PromptExecutionResult, PromptTemplate
 
 
 class PromptExecutor:
     """Executes prompt templates with context aggregation."""
+
+    # Constants for context formatting
+    CONTENT_TRUNCATE_LENGTH = 500
+    ERROR_MESSAGE_TRUNCATE_LENGTH = 100
+    DEFAULT_CUSTOM_MAX_TOKENS = 2048
 
     def __init__(
         self,
@@ -99,6 +104,51 @@ class PromptExecutor:
             sources_failed=self._aggregator.failed_sources,
         )
 
+    async def execute_with_items(
+        self,
+        prompt_id: str,
+        items: list[ContextItem],
+        context_kwargs: dict[str, Any] | None = None,
+    ) -> PromptExecutionResult:
+        """Execute a prompt template with pre-fetched items.
+
+        This method is useful when items have already been fetched and ranked,
+        avoiding redundant data fetching.
+
+        Args:
+            prompt_id: Prompt template ID to execute.
+            items: Pre-fetched and ranked context items.
+            context_kwargs: Additional kwargs for prompt template formatting.
+
+        Returns:
+            PromptExecutionResult with generated text and metadata.
+
+        Raises:
+            ValueError: If prompt_id is not registered.
+        """
+        start_time = time()
+
+        # Get prompt template
+        template = PromptRegistry.get(prompt_id)
+
+        # Generate AI response with prompt-specific config
+        generated_text = await self._generate_with_template(
+            template, items, context_kwargs
+        )
+
+        # Build result
+        execution_time = time() - start_time
+        return PromptExecutionResult(
+            prompt_id=prompt_id,
+            generated_text=generated_text,
+            format=template.output_format,
+            context_items_count=len(items),
+            execution_time_seconds=execution_time,
+            generated_at=datetime.now(),
+            sources_used=list(set(item.source_type.value for item in items)),
+            sources_failed=[],  # No fetching occurred, so no failures
+        )
+
     async def execute_custom(
         self,
         user_prompt: str,
@@ -138,11 +188,11 @@ class PromptExecutor:
 
         # Generate response
         try:
-            generated_text = await ai_client._generate_content_with_config(
+            generated_text = await ai_client.generate_content_with_config(
                 prompt=full_prompt,
                 system_instruction="You are a helpful assistant.",
                 temperature=temperature,
-                max_output_tokens=2048,
+                max_output_tokens=self.DEFAULT_CUSTOM_MAX_TOKENS,
             )
         except Exception as e:
             generated_text = f"Error generating response: {e}"
@@ -151,7 +201,7 @@ class PromptExecutor:
         return PromptExecutionResult(
             prompt_id="custom",
             generated_text=generated_text,
-            format="text",
+            format=OutputFormat.TEXT,
             context_items_count=len(items),
             execution_time_seconds=execution_time,
             generated_at=datetime.now(),
@@ -227,7 +277,7 @@ class PromptExecutor:
 
         # Generate with template-specific settings
         try:
-            return await ai_client._generate_content_with_config(
+            return await ai_client.generate_content_with_config(
                 prompt=user_prompt,
                 system_instruction=template.system_prompt,
                 temperature=template.temperature,
@@ -258,8 +308,8 @@ class PromptExecutor:
                 item_text += f"From: {item.author}\n"
             item_text += f"Time: {item.timestamp.strftime('%Y-%m-%d %H:%M')}\n"
             if item.content:
-                content = item.content[:500]
-                if len(item.content) > 500:
+                content = item.content[:self.CONTENT_TRUNCATE_LENGTH]
+                if len(item.content) > self.CONTENT_TRUNCATE_LENGTH:
                     content += "..."
                 item_text += f"Content: {content}\n"
             if item.url:
@@ -292,5 +342,5 @@ class PromptExecutor:
         return (
             f"AI generation unavailable. Manual review recommended.\n\n"
             f"You have {len(items)} items to review: {counts_str}.\n\n"
-            f"(AI error: {error_msg[:100]})"
+            f"(AI error: {error_msg[:self.ERROR_MESSAGE_TRUNCATE_LENGTH]})"
         )

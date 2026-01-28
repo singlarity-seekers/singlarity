@@ -215,7 +215,7 @@ class VertexAIClient:
 
         return "\n".join(parts)
 
-    async def _generate_content_with_config(
+    async def generate_content_with_config(
         self,
         prompt: str,
         system_instruction: str,
