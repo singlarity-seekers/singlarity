@@ -78,10 +78,25 @@ devassist config add github
 devassist config list
 devassist config test
 
+# Migrate config.yaml to .mcp.json format
+devassist config migrate
+
 # Generate morning brief
 devassist brief
 devassist brief --refresh  # bypass cache
 devassist brief --json     # JSON output
+
+# Background AI runner
+devassist ai run                     # Start background runner (default: 5 min interval)
+devassist ai run --interval 10       # Custom interval in minutes
+devassist ai run --prompt "Custom prompt"  # Custom prompt
+devassist ai run --foreground        # Run in foreground (Ctrl+C to stop)
+devassist ai status                  # Show runner status
+devassist ai logs                    # Show last 50 log lines
+devassist ai logs --follow           # Follow logs (like tail -f)
+devassist ai logs --lines 100        # Show last 100 lines
+devassist ai kill                    # Stop runner gracefully
+devassist ai kill --force            # Force kill
 ```
 
 ## Architecture
@@ -90,12 +105,13 @@ devassist brief --json     # JSON output
 
 ```
 src/devassist/
-├── cli/         # Typer CLI commands (presentation layer)
-├── core/        # Business logic (aggregator, ranker, brief_generator)
+├── cli/         # Typer CLI commands (main, config, brief, ai)
+├── core/        # Business logic (aggregator, ranker, brief_generator, runner)
 ├── adapters/    # Context source adapters (gmail, slack, jira, github)
-├── ai/          # Vertex AI integration for summarization
+├── ai/          # AI clients (claude_client, vertex_client, base_client)
 ├── preferences/ # Preference learning system
-└── models/      # Pydantic data models
+├── models/      # Pydantic data models (mcp_config, context, brief)
+└── utils/       # Utilities (process management, logging)
 ```
 
 ### Separation of Concerns (SOLID Principles)
@@ -110,7 +126,10 @@ The architecture follows strict separation to enable future UI extensions (web a
    - `config_manager.py` - Configuration and workspace management
    - `cache_manager.py` - 15-minute TTL caching
 3. **Adapters** (`adapters/`): All implement `ContextSourceAdapter` contract (OCP: extend without modifying)
-4. **AI Layer** (`ai/`): Vertex AI client and prompt templates
+4. **AI Layer** (`ai/`): AI client implementations (Claude SDK, Vertex AI) and prompt templates
+5. **Runner Components** (`core/`):
+   - `runner.py` - Background runner with asyncio event loop
+   - `runner_manager.py` - Process lifecycle management (PID files, signals)
 
 ### Plugin Architecture for Context Sources
 
@@ -143,10 +162,63 @@ Rich Console → formatted terminal output
 
 ### Configuration Precedence
 
-The system uses three-tier configuration:
+The system uses a multi-tier configuration:
 1. CLI flags (highest priority)
 2. Environment variables
-3. Config files: `~/.devassist/config.yaml` (lowest priority)
+3. `.mcp.json` in current working directory
+4. `~/.devassist/.mcp.json`
+5. `~/.devassist/config.yaml` (legacy, deprecated)
+
+### .mcp.json Configuration
+
+The `.mcp.json` file is the primary configuration format supporting MCP servers, AI providers, and the background runner:
+
+```json
+{
+  "version": "1.0",
+  "mcp_servers": {
+    "devassist": {
+      "command": "devassist",
+      "args": ["--config", "${workspace}/.mcp.json"],
+      "env": {}
+    }
+  },
+  "ai": {
+    "provider": "claude",
+    "claude": {
+      "api_key": "${ANTHROPIC_API_KEY}",
+      "model": "claude-sonnet-4-5-20250929",
+      "max_tokens": 4096,
+      "temperature": 0.7
+    },
+    "vertex": {
+      "api_key": "${GOOGLE_AI_API_KEY}",
+      "project_id": "${GCP_PROJECT_ID}",
+      "location": "us-central1",
+      "model": "gemini-2.5-flash"
+    }
+  },
+  "runner": {
+    "enabled": false,
+    "interval_minutes": 5,
+    "prompt": "Review my context and summarize urgent items.",
+    "output_destination": "~/.devassist/runner-output.md",
+    "notify_on_completion": false,
+    "sources": []
+  },
+  "sources": {
+    "gmail": { "enabled": true },
+    "slack": { "bot_token": "${SLACK_BOT_TOKEN}" }
+  },
+  "preferences": {
+    "priority_keywords": ["urgent", "critical"]
+  }
+}
+```
+
+**Environment Variable Expansion**: Use `${VAR_NAME}` syntax to reference environment variables. Undefined variables expand to empty string.
+
+**Migration**: Run `devassist config migrate` to convert `config.yaml` to `.mcp.json` format.
 
 ### Storage Model
 
@@ -154,7 +226,13 @@ All data is stored locally in `~/.devassist/`:
 
 ```
 ~/.devassist/
-├── config.yaml          # User configuration (includes credentials in dev mode)
+├── .mcp.json            # Primary configuration (MCP servers, AI, runner)
+├── config.yaml          # Legacy configuration (deprecated)
+├── runner.pid           # Background runner PID file
+├── runner.lock          # Runner lock file (single-instance enforcement)
+├── runner-output.md     # Runner output destination
+├── logs/
+│   └── runner.log       # Background runner logs
 ├── cache/               # Source-specific caches (15-min TTL)
 │   ├── gmail/
 │   ├── slack/
@@ -232,17 +310,38 @@ Use Rich library for all CLI output:
 - Progress bars for multi-source fetching
 - Styled text for errors/warnings
 
-### GCP Vertex AI Integration
+### AI Provider Integration
 
-The project uses GCP Vertex AI (Gemini model) for:
+The project supports multiple AI providers:
+
+**Claude (Anthropic)** - Primary provider for background runner:
+- Background prompt execution
+- Context summarization
+- Custom task automation
+
+```bash
+# Set API key
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+**Vertex AI (Google)** - Alternative provider:
 - Brief summarization
 - Item categorization
 - Draft response generation
 
-Authentication via Application Default Credentials:
 ```bash
 gcloud auth application-default login
 gcloud config set project YOUR_PROJECT_ID
+```
+
+Configure provider in `.mcp.json`:
+```json
+{
+  "ai": {
+    "provider": "claude",  // or "vertex"
+    ...
+  }
+}
 ```
 
 ## Specification-First Workflow
@@ -278,6 +377,8 @@ Current development is in the `python-cli` branch. Active work includes:
 - ✅ Core models and configuration management
 - ✅ Base adapter contract
 - ✅ Brief generation orchestration with AI integration
+- ✅ Background AI runner with Claude SDK integration
+- ✅ .mcp.json configuration format with environment variable expansion
 - 🚧 Context source adapter implementations (Gmail, Slack, JIRA, GitHub)
 - ⏳ Preference learning system (planned)
 - ⏳ EC2 sandbox management (planned)
@@ -290,11 +391,15 @@ See `specs/001-dev-assistant-cli/tasks.md` for detailed task tracking.
 ### Currently Implemented
 - `devassist status` - Show configuration status
 - `devassist config add/list/remove/test` - Manage context sources (interactive setup)
+- `devassist config migrate` - Migrate config.yaml to .mcp.json format
 - `devassist brief` - Generate morning brief with AI summarization
+- `devassist ai run` - Start background AI runner process
+- `devassist ai kill` - Stop background runner
+- `devassist ai status` - Show runner status
+- `devassist ai logs` - View runner logs
 
 ### Planned (Not Yet Implemented)
 - `devassist prefs` - Preference management
-- `devassist ai` - AI service management
 - `devassist sandbox` - EC2 instance management
 - Quarterly notes generation
 - Auto-response drafting

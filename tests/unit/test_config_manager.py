@@ -23,13 +23,15 @@ class TestConfigManager:
         assert workspace.is_dir()
 
     def test_load_config_returns_default_when_no_file(self, tmp_path: Path) -> None:
-        """Should return default config when no config file exists."""
+        """Should return default MCPConfig when no config file exists."""
         workspace = tmp_path / ".devassist"
         manager = ConfigManager(workspace_dir=workspace)
 
         config = manager.load_config()
 
-        assert isinstance(config, AppConfig)
+        # Now defaults to MCPConfig instead of AppConfig
+        from devassist.models.mcp_config import MCPConfig
+        assert isinstance(config, MCPConfig)
         assert config.sources == {}
 
     def test_save_and_load_config_roundtrip(self, tmp_path: Path) -> None:

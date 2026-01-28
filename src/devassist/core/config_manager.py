@@ -1,9 +1,11 @@
 """Configuration manager for DevAssist.
 
 Handles loading, saving, and managing application configuration.
-Supports environment variable overrides.
+Supports environment variable overrides and .mcp.json format.
 """
 
+import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -11,12 +13,16 @@ from typing import Any
 import yaml
 
 from devassist.models.config import AIConfig, AppConfig
+from devassist.models.mcp_config import MCPConfig, expand_env_vars
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigManager:
-    """Manages application configuration with YAML persistence and env var support."""
+    """Manages application configuration with .mcp.json and legacy YAML support."""
 
-    CONFIG_FILENAME = "config.yaml"
+    CONFIG_FILENAME = "config.yaml"  # Legacy
+    MCP_FILENAME = ".mcp.json"
     ENV_PREFIX = "DEVASSIST_"
 
     def __init__(self, workspace_dir: Path | str | None = None) -> None:
@@ -29,7 +35,7 @@ class ConfigManager:
             workspace_dir = Path.home() / ".devassist"
         self.workspace_dir = Path(workspace_dir)
         self._ensure_workspace_exists()
-        self._config: AppConfig | None = None
+        self._config: MCPConfig | AppConfig | None = None
 
     def _ensure_workspace_exists(self) -> None:
         """Create workspace directory if it doesn't exist."""
@@ -40,29 +46,84 @@ class ConfigManager:
         """Get path to config file."""
         return self.workspace_dir / self.CONFIG_FILENAME
 
-    def load_config(self) -> AppConfig:
-        """Load configuration from file with environment variable overrides.
+    def load_config(self) -> MCPConfig | AppConfig:
+        """Load configuration with precedence handling.
+
+        Configuration precedence:
+        1. ./.mcp.json (current working directory)
+        2. ~/.devassist/.mcp.json (workspace directory)
+        3. ~/.devassist/config.yaml (legacy, deprecated)
+        4. Defaults (MCPConfig)
 
         Returns:
-            AppConfig instance with merged file and env var settings.
+            MCPConfig or AppConfig (legacy) instance.
         """
-        # Start with defaults
+        cwd_mcp_path = Path.cwd() / self.MCP_FILENAME
+        workspace_mcp_path = self.workspace_dir / self.MCP_FILENAME
+        legacy_config_path = self.config_path
+
+        # Priority 1: Current working directory .mcp.json
+        if cwd_mcp_path.exists():
+            config = self._load_mcp_config(cwd_mcp_path)
+            self._config = config
+            return config
+
+        # Priority 2: Workspace .mcp.json
+        if workspace_mcp_path.exists():
+            config = self._load_mcp_config(workspace_mcp_path)
+            self._config = config
+            return config
+
+        # Priority 3: Legacy config.yaml
+        if legacy_config_path.exists():
+            logger.warning(
+                "config.yaml is deprecated. Run 'devassist config migrate' to upgrade to .mcp.json"
+            )
+            config = self._load_legacy_config(legacy_config_path)
+            self._config = config
+            return config
+
+        # Priority 4: Defaults
+        config = MCPConfig()
+        self._config = config
+        return config
+
+    def _load_mcp_config(self, path: Path) -> MCPConfig:
+        """Load MCPConfig from .mcp.json file.
+
+        Args:
+            path: Path to .mcp.json file.
+
+        Returns:
+            MCPConfig instance with environment variables expanded.
+        """
+        with open(path) as f:
+            data = json.load(f)
+
+        # Expand environment variables
+        data = expand_env_vars(data)
+
+        # Create and return config
+        return MCPConfig(**data)
+
+    def _load_legacy_config(self, path: Path) -> AppConfig:
+        """Load legacy AppConfig from config.yaml.
+
+        Args:
+            path: Path to config.yaml file.
+
+        Returns:
+            AppConfig instance with environment variable overrides.
+        """
         config_data: dict[str, Any] = {}
 
-        # Load from file if exists
-        if self.config_path.exists():
-            with open(self.config_path) as f:
-                file_data = yaml.safe_load(f)
-                if file_data:
-                    config_data = file_data
+        with open(path) as f:
+            file_data = yaml.safe_load(f)
+            if file_data:
+                config_data = file_data
 
-        # Create config from file data
         config = AppConfig(**config_data)
-
-        # Apply environment variable overrides
         config = self._apply_env_overrides(config)
-
-        self._config = config
         return config
 
     def _apply_env_overrides(self, config: AppConfig) -> AppConfig:
@@ -102,22 +163,32 @@ class ConfigManager:
 
         return AppConfig(**config_dict)
 
-    def save_config(self, config: AppConfig) -> None:
-        """Save configuration to YAML file.
+    def save_config(self, config: MCPConfig | AppConfig) -> None:
+        """Save configuration to appropriate file format.
 
         Args:
-            config: AppConfig instance to save.
+            config: MCPConfig or AppConfig instance to save.
         """
         self._ensure_workspace_exists()
-        config_dict = config.model_dump()
 
-        with open(self.config_path, "w") as f:
-            yaml.safe_dump(config_dict, f, default_flow_style=False)
+        if isinstance(config, MCPConfig):
+            # Save as .mcp.json to workspace
+            config_dict = config.model_dump()
+            mcp_path = self.workspace_dir / self.MCP_FILENAME
+            with open(mcp_path, "w") as f:
+                json.dump(config_dict, f, indent=2)
+        else:
+            # Save as legacy config.yaml
+            config_dict = config.model_dump()
+            with open(self.config_path, "w") as f:
+                yaml.safe_dump(config_dict, f, default_flow_style=False)
 
         self._config = config
 
     def get_source_config(self, source_name: str) -> dict[str, Any] | None:
         """Get configuration for a specific source.
+
+        Works with both MCPConfig and AppConfig.
 
         Args:
             source_name: Name of the source (e.g., 'gmail', 'slack').
@@ -133,6 +204,8 @@ class ConfigManager:
     ) -> None:
         """Set configuration for a specific source.
 
+        Works with both MCPConfig and AppConfig.
+
         Args:
             source_name: Name of the source.
             source_config: Configuration dict for the source.
@@ -143,6 +216,8 @@ class ConfigManager:
 
     def remove_source_config(self, source_name: str) -> bool:
         """Remove configuration for a specific source.
+
+        Works with both MCPConfig and AppConfig.
 
         Args:
             source_name: Name of the source to remove.
@@ -159,6 +234,8 @@ class ConfigManager:
 
     def list_sources(self) -> list[str]:
         """List all configured source names.
+
+        Works with both MCPConfig and AppConfig.
 
         Returns:
             List of configured source names.

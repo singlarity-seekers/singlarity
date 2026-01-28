@@ -4,8 +4,10 @@ Handles AI summarization using Google Cloud Vertex AI (Gemini).
 """
 
 import asyncio
+import json
 from typing import Any
 
+from devassist.ai.base_client import BaseAIClient
 from devassist.ai.prompts import NO_ITEMS_SUMMARY, build_summarization_prompt, get_system_prompt
 from devassist.models.context import ContextItem
 
@@ -21,7 +23,7 @@ except ImportError:
     types = None  # type: ignore
 
 
-class VertexAIClient:
+class VertexAIClient(BaseAIClient):
     """Client for Vertex AI Gemini model interactions."""
 
     DEFAULT_MODEL = "gemini-1.5-flash"
@@ -155,6 +157,50 @@ class VertexAIClient:
 
         return response.text
 
+    async def execute_prompt(self, prompt: str, context: dict[str, Any]) -> str:
+        """Execute a custom prompt with provided context.
+
+        Args:
+            prompt: The user's custom prompt/instruction.
+            context: Dictionary of context data.
+
+        Returns:
+            AI-generated response string.
+
+        Raises:
+            Exception: If execution fails after retries.
+        """
+        # Build full prompt with context
+        context_json = json.dumps(context, indent=2, default=str)
+        full_prompt = f"{prompt}\n\nContext:\n{context_json}"
+
+        # Retry loop
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries):
+            try:
+                return await self._generate_content(full_prompt)
+            except Exception as e:
+                last_error = e
+                if attempt < self.max_retries - 1:
+                    await asyncio.sleep(2**attempt)
+
+        if last_error:
+            raise last_error
+        raise RuntimeError("Execution failed with unknown error")
+
+    async def test_connection(self) -> bool:
+        """Test connection to Vertex AI.
+
+        Returns:
+            True if connection is successful, False otherwise.
+        """
+        try:
+            # Simple test prompt
+            await self._generate_content("Respond with 'OK' if you can read this.")
+            return True
+        except Exception:
+            return False
+
     def _build_prompt(self, items: list[ContextItem]) -> str:
         """Build the prompt from context items.
 
@@ -184,33 +230,3 @@ class VertexAIClient:
 
         context_text = "\n\n".join(context_parts)
         return build_summarization_prompt(context_text)
-
-    def _format_item(self, item: ContextItem) -> str:
-        """Format a single context item for the prompt.
-
-        Args:
-            item: Context item to format.
-
-        Returns:
-            Formatted string representation.
-        """
-        parts = [
-            f"[{item.source_type.value.upper()}] {item.title}",
-        ]
-
-        if item.author:
-            parts.append(f"From: {item.author}")
-
-        parts.append(f"Time: {item.timestamp.strftime('%Y-%m-%d %H:%M')}")
-
-        if item.content:
-            # Truncate long content
-            content = item.content[:500]
-            if len(item.content) > 500:
-                content += "..."
-            parts.append(f"Content: {content}")
-
-        if item.url:
-            parts.append(f"Link: {item.url}")
-
-        return "\n".join(parts)

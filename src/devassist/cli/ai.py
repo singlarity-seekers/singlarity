@@ -1,0 +1,341 @@
+"""AI CLI commands for DevAssist.
+
+Provides commands for managing the background AI runner.
+"""
+
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+import typer
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
+from devassist.core.config_manager import ConfigManager
+from devassist.core.runner_manager import RunnerManager
+from devassist.models.mcp_config import MCPConfig
+
+# Create router for AI commands
+app = typer.Typer(
+    name="ai",
+    help="Manage background AI runner.",
+    no_args_is_help=True,
+)
+
+console = Console()
+
+
+def get_ai_client(config: MCPConfig):
+    """Create AI client based on configuration.
+
+    Args:
+        config: MCP configuration.
+
+    Returns:
+        Configured AI client (Claude or Vertex).
+
+    Raises:
+        RuntimeError: If no API key configured.
+    """
+    if config.ai.provider == "claude":
+        from devassist.ai.claude_client import ClaudeClient
+
+        api_key = config.ai.claude.api_key
+        if not api_key:
+            raise RuntimeError(
+                "Claude API key not configured. "
+                "Set ANTHROPIC_API_KEY or add api_key to .mcp.json"
+            )
+        return ClaudeClient(
+            api_key=api_key,
+            model=config.ai.claude.model,
+            max_tokens=config.ai.claude.max_tokens,
+            temperature=config.ai.claude.temperature,
+        )
+    else:
+        from devassist.ai.vertex_client import VertexAIClient
+
+        return VertexAIClient(
+            api_key=config.ai.vertex.api_key,
+            project_id=config.ai.vertex.project_id,
+            location=config.ai.vertex.location,
+            model=config.ai.vertex.model,
+        )
+
+
+def run_background_runner() -> None:
+    """Entry point for background runner process.
+
+    This function is called in a separate process and runs the runner loop.
+    """
+    import asyncio
+    import logging
+
+    from devassist.core.aggregator import ContextAggregator
+    from devassist.core.runner import Runner
+
+    # Setup logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+
+    # Load configuration
+    manager = ConfigManager()
+    config = manager.load_config()
+
+    if not isinstance(config, MCPConfig):
+        logging.error("Legacy config.yaml not supported for runner. Use .mcp.json")
+        return
+
+    # Create AI client
+    try:
+        ai_client = get_ai_client(config)
+    except RuntimeError as e:
+        logging.error(f"Failed to create AI client: {e}")
+        return
+
+    # Create aggregator
+    aggregator = ContextAggregator()
+
+    # Create and run runner
+    runner = Runner(
+        config=config,
+        ai_client=ai_client,
+        aggregator=aggregator,
+    )
+
+    # Run the event loop
+    asyncio.run(runner.run())
+
+
+@app.command("run")
+def run_runner(
+    interval: Optional[int] = typer.Option(
+        None,
+        "--interval",
+        "-i",
+        help="Interval in minutes between executions.",
+    ),
+    prompt: Optional[str] = typer.Option(
+        None,
+        "--prompt",
+        "-p",
+        help="Custom prompt to execute.",
+    ),
+    foreground: bool = typer.Option(
+        False,
+        "--foreground",
+        "-f",
+        help="Run in foreground instead of background.",
+    ),
+) -> None:
+    """Start the background AI runner.
+
+    The runner executes a custom prompt at regular intervals using context
+    from configured sources.
+    """
+    # Load configuration
+    manager = ConfigManager()
+    config = manager.load_config()
+
+    if not isinstance(config, MCPConfig):
+        console.print("[red]Error:[/red] Legacy config.yaml not supported for runner.")
+        console.print("Run [bold]devassist config migrate[/bold] to upgrade.")
+        raise typer.Exit(1)
+
+    # Update config with CLI options
+    if interval is not None:
+        config.runner.interval_minutes = interval
+    if prompt is not None:
+        config.runner.prompt = prompt
+
+    # Check AI configuration
+    try:
+        get_ai_client(config)
+    except RuntimeError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    # Create runner manager
+    runner_manager = RunnerManager()
+
+    # Check if already running
+    if runner_manager.is_running():
+        status = runner_manager.get_status()
+        console.print(f"[yellow]Runner is already running (PID: {status.pid})[/yellow]")
+        console.print("Run [bold]devassist ai kill[/bold] to stop it first.")
+        raise typer.Exit(1)
+
+    if foreground:
+        # Run in foreground
+        console.print("[bold]Starting AI runner in foreground...[/bold]")
+        console.print(f"  Interval: {config.runner.interval_minutes} minutes")
+        console.print(f"  Prompt: {config.runner.prompt[:50]}...")
+        console.print("\nPress Ctrl+C to stop.\n")
+
+        import asyncio
+
+        from devassist.core.aggregator import ContextAggregator
+        from devassist.core.runner import Runner
+
+        ai_client = get_ai_client(config)
+        aggregator = ContextAggregator()
+        runner = Runner(
+            config=config,
+            ai_client=ai_client,
+            aggregator=aggregator,
+        )
+
+        try:
+            asyncio.run(runner.run())
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Runner stopped by user.[/yellow]")
+
+    else:
+        # Run in background
+        try:
+            runner_manager.start(target=run_background_runner)
+            status = runner_manager.get_status()
+
+            console.print(
+                Panel(
+                    f"[green]Background AI runner started[/green]\n\n"
+                    f"  PID: {status.pid}\n"
+                    f"  Interval: {config.runner.interval_minutes} minutes\n"
+                    f"  Prompt: {config.runner.prompt[:50]}...\n"
+                    f"  Output: {config.runner.output_destination}\n"
+                    f"  Logs: {runner_manager.get_log_path()}",
+                    title="Runner Started",
+                    border_style="green",
+                )
+            )
+
+            console.print("\nRun [bold]devassist ai status[/bold] to check progress")
+            console.print("Run [bold]devassist ai kill[/bold] to stop")
+
+        except RuntimeError as e:
+            console.print(f"[red]Error starting runner:[/red] {e}")
+            raise typer.Exit(1)
+
+
+@app.command("kill")
+def kill_runner(
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Force kill without graceful shutdown.",
+    ),
+) -> None:
+    """Stop the background AI runner."""
+    runner_manager = RunnerManager()
+
+    if not runner_manager.is_running():
+        console.print("[yellow]No runner is currently running.[/yellow]")
+        return
+
+    status = runner_manager.get_status()
+    console.print(f"Stopping runner (PID: {status.pid})...")
+
+    try:
+        runner_manager.stop(force=force)
+        console.print("[green]Runner stopped successfully.[/green]")
+    except Exception as e:
+        console.print(f"[red]Error stopping runner:[/red] {e}")
+        raise typer.Exit(1)
+
+
+@app.command("status")
+def show_status() -> None:
+    """Show current runner status."""
+    runner_manager = RunnerManager()
+    manager = ConfigManager()
+    config = manager.load_config()
+
+    status = runner_manager.get_status()
+
+    # Build status table
+    table = Table(show_header=False, box=None)
+    table.add_column("Key", style="cyan")
+    table.add_column("Value")
+
+    if status.status == "running":
+        table.add_row("Status", f"[green]Running[/green] (PID: {status.pid})")
+    else:
+        table.add_row("Status", "[dim]Not running[/dim]")
+
+    if isinstance(config, MCPConfig):
+        table.add_row("Interval", f"{config.runner.interval_minutes} minutes")
+        table.add_row("AI Provider", config.ai.provider.title())
+
+        if config.runner.last_run:
+            table.add_row("Last Run", config.runner.last_run)
+        else:
+            table.add_row("Last Run", "[dim]Never[/dim]")
+
+        table.add_row("Output File", config.runner.output_destination)
+
+        if config.runner.sources:
+            table.add_row("Sources", ", ".join(config.runner.sources))
+        else:
+            table.add_row("Sources", "[dim]All configured[/dim]")
+
+    table.add_row("Logs", str(runner_manager.get_log_path()))
+
+    console.print()
+    console.print(Panel(table, title="AI Runner Status", border_style="blue"))
+    console.print()
+
+
+@app.command("logs")
+def show_logs(
+    follow: bool = typer.Option(
+        False,
+        "--follow",
+        "-f",
+        help="Follow log output (like tail -f).",
+    ),
+    lines: int = typer.Option(
+        50,
+        "--lines",
+        "-n",
+        help="Number of lines to show.",
+    ),
+) -> None:
+    """Show runner logs."""
+    runner_manager = RunnerManager()
+    log_path = runner_manager.get_log_path()
+
+    if not log_path.exists():
+        console.print("[yellow]No log file found.[/yellow]")
+        console.print("The runner may not have been started yet.")
+        return
+
+    if follow:
+        # Follow mode - use tail -f behavior
+        console.print(f"[dim]Following {log_path} (Ctrl+C to stop)[/dim]\n")
+
+        import subprocess
+
+        try:
+            subprocess.run(["tail", "-f", str(log_path)])
+        except KeyboardInterrupt:
+            pass
+    else:
+        # Show last N lines
+        content = log_path.read_text()
+        log_lines = content.strip().split("\n")
+
+        if len(log_lines) > lines:
+            log_lines = log_lines[-lines:]
+
+        if log_lines:
+            console.print(f"[dim]Last {len(log_lines)} lines from {log_path}:[/dim]\n")
+            for line in log_lines:
+                console.print(line)
+        else:
+            console.print("[yellow]Log file is empty.[/yellow]")

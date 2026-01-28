@@ -86,10 +86,12 @@ def status() -> None:
 
 
 # Import and register sub-commands
+from devassist.cli.ai import app as ai_app
 from devassist.cli.brief import app as brief_app
 from devassist.cli.config import app as config_app
 
 # Register subcommands
+app.add_typer(ai_app, name="ai")
 app.add_typer(config_app, name="config")
 app.add_typer(brief_app, name="brief")
 

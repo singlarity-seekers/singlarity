@@ -48,14 +48,36 @@ class BriefGenerator:
         self._ranker = ranker or RelevanceRanker(priority_keywords=priority_keywords)
 
         # Initialize AI client with config
-        self._ai_client = ai_client or VertexAIClient(
-            api_key=config.ai.api_key,
-            project_id=config.ai.project_id,
-            location=config.ai.location,
-            model=config.ai.model,
-            max_retries=config.ai.max_retries,
-            timeout_seconds=config.ai.timeout_seconds,
-        )
+        # Support both MCPConfig (new) and AppConfig (legacy)
+        from devassist.models.mcp_config import MCPConfig
+
+        if isinstance(config, MCPConfig):
+            # New MCPConfig format
+            if config.ai.provider == "vertex":
+                self._ai_client = ai_client or VertexAIClient(
+                    api_key=config.ai.vertex.api_key,
+                    project_id=config.ai.vertex.project_id,
+                    location=config.ai.vertex.location,
+                    model=config.ai.vertex.model,
+                )
+            else:
+                # Claude provider - use VertexAI as fallback for brief generation
+                self._ai_client = ai_client or VertexAIClient(
+                    api_key=config.ai.vertex.api_key,
+                    project_id=config.ai.vertex.project_id,
+                    location=config.ai.vertex.location,
+                    model=config.ai.vertex.model,
+                )
+        else:
+            # Legacy AppConfig format
+            self._ai_client = ai_client or VertexAIClient(
+                api_key=config.ai.api_key,
+                project_id=config.ai.project_id,
+                location=config.ai.location,
+                model=config.ai.model,
+                max_retries=config.ai.max_retries,
+                timeout_seconds=config.ai.timeout_seconds,
+            )
 
     async def generate(
         self,
