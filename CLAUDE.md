@@ -83,14 +83,17 @@ devassist brief
 devassist brief --refresh  # bypass cache
 devassist brief --json     # JSON output
 
-# Prompt-based commands
-devassist standup            # Daily standup (Yesterday/Today/Blockers)
-devassist weekly             # Weekly retrospective
-devassist meeting-prep "Sprint Planning"  # Meeting context preparation
-devassist pr-summary         # Pull request activity summary
-devassist ask "What's blocking the release?"  # Custom prompt with context
-devassist ask "Explain async/await" --no-context  # Pure AI query
-devassist list               # List all available prompts
+# Custom questions (default behavior - natural language)
+devassist "What's blocking the release?"  # Custom question with context
+devassist "Explain async/await" --no-context  # Pure AI query without context
+devassist "what are my open PRs?"  # Questions work by default
+
+# Built-in prompt commands (use 'prompt' prefix)
+devassist prompt standup            # Daily standup (Yesterday/Today/Blockers)
+devassist prompt weekly             # Weekly retrospective
+devassist prompt meeting-prep "Sprint Planning"  # Meeting context preparation
+devassist prompt pr-summary         # Pull request activity summary
+devassist prompt list               # List all available prompts
 ```
 
 ## Architecture
@@ -301,12 +304,12 @@ See `specs/001-dev-assistant-cli/tasks.md` for detailed task tracking.
 - `devassist config add/list/remove/test` - Manage context sources (interactive setup)
 - `devassist brief` - Generate morning brief with AI summarization
 - **Prompt Library System (NEW):**
-  - `devassist standup` - Daily standup (Yesterday/Today/Blockers)
-  - `devassist weekly` - Weekly retrospective summary
-  - `devassist meeting-prep <topic>` - Meeting context preparation
-  - `devassist pr-summary` - PR activity summary
-  - `devassist ask <prompt>` - Custom prompts with optional context
-  - `devassist list` - List all available prompt templates
+  - `devassist "question"` - Ask custom questions with context (default behavior)
+  - `devassist prompt standup` - Daily standup (Yesterday/Today/Blockers)
+  - `devassist prompt weekly` - Weekly retrospective summary
+  - `devassist prompt meeting-prep <topic>` - Meeting context preparation
+  - `devassist prompt pr-summary` - PR activity summary
+  - `devassist prompt list` - List all available prompt templates
 
 ### Planned (Not Yet Implemented)
 - `devassist prefs` - Preference management

@@ -71,28 +71,21 @@ devassist brief --json
 
 ### Prompt-Based Commands
 
+Ask questions naturally (default), or use built-in prompt templates:
+
 ```bash
-# Daily standup
-devassist standup
-devassist standup --json  # JSON output
+# Custom questions (default behavior - just ask!)
+devassist "What are the most urgent issues?"
+devassist "what are my open PRs?"
+devassist "Explain Python decorators" --no-context  # Pure AI without context
 
-# Weekly retrospective
-devassist weekly
-
-# Meeting preparation
-devassist meeting-prep "Sprint Planning"
-
-# PR activity summary
-devassist pr-summary
-
-# Custom prompt with context
-devassist ask "What are the most urgent issues?"
-
-# Custom prompt without context (pure AI)
-devassist ask "Explain Python decorators" --no-context
-
-# List all available prompts
-devassist list
+# Built-in prompt templates (use 'prompt' prefix)
+devassist prompt standup                    # Daily standup
+devassist prompt standup --json             # JSON output
+devassist prompt weekly                     # Weekly retrospective
+devassist prompt meeting-prep "Sprint Planning"  # Meeting preparation
+devassist prompt pr-summary                 # PR activity summary
+devassist prompt list                       # List all available prompts
 ```
 
 ### Configuration

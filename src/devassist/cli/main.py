@@ -62,8 +62,57 @@ def main(
     An AI-powered CLI that aggregates context from multiple developer tools
     (Gmail, Slack, JIRA, GitHub) and generates a Unified Morning Brief.
     """
-    # Security warning is shown contextually by commands that handle credentials
     pass
+
+
+@app.command(name="ask")
+def ask_question(
+    query: list[str] = typer.Argument(..., help="Your question"),
+    no_context: bool = typer.Option(
+        False,
+        "--no-context",
+        help="Don't include aggregated context (pure AI query)",
+    ),
+    hours: int = typer.Option(
+        24,
+        "--hours",
+        "-h",
+        help="Context time window in hours (default: 24)",
+    ),
+    temperature: float = typer.Option(
+        0.5,
+        "--temperature",
+        "-t",
+        help="AI temperature for generation (0.0-2.0, default: 0.5)",
+    ),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+) -> None:
+    """Ask a custom question with context (default if no command specified)."""
+    import asyncio
+    from devassist.core.prompt_executor import PromptExecutor
+    from devassist.cli.prompt_commands import display_result
+
+    full_query = " ".join(query)
+
+    if no_context:
+        console.print("[dim]Executing custom question (no context)...[/dim]")
+    else:
+        console.print(f"[dim]Executing custom question (context: last {hours}h)...[/dim]")
+
+    try:
+        executor = PromptExecutor()
+        result = asyncio.run(
+            executor.execute_custom(
+                user_prompt=full_query,
+                include_context=not no_context,
+                time_window_hours=hours,
+                temperature=temperature,
+            )
+        )
+        display_result(result, json_output)
+    except Exception as e:
+        console.print(f"[red]Error executing question:[/red] {e}")
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -88,27 +137,33 @@ def status() -> None:
 # Import and register sub-commands
 from devassist.cli.brief import app as brief_app
 from devassist.cli.config import app as config_app
-from devassist.cli.prompt_commands import (
-    ask,
-    list_prompts,
-    meeting_prep,
-    pr_summary,
-    standup,
-    weekly,
-)
+from devassist.cli.prompt_commands import prompt
 
 # Register subcommands
 app.add_typer(config_app, name="config")
 app.add_typer(brief_app, name="brief")
 
-# Register prompt commands as top-level commands
-app.command(name="standup")(standup)
-app.command(name="weekly")(weekly)
-app.command(name="meeting-prep")(meeting_prep)
-app.command(name="pr-summary")(pr_summary)
-app.command(name="ask")(ask)
-app.command(name="list")(list_prompts)
+# Register prompt command for built-in templates
+app.command(name="prompt")(prompt)
+
+
+def cli_main():
+    """Main entry point with custom argument handling for default behavior."""
+    import sys
+
+    # Known subcommands
+    known_commands = {"config", "brief", "status", "prompt", "ask", "--help", "-h", "--version", "-v"}
+
+    # If no arguments or first arg is a known command/flag, use normal Typer behavior
+    if len(sys.argv) <= 1 or sys.argv[1] in known_commands:
+        app()
+        return
+
+    # Otherwise, treat entire command line as a question for "ask" command
+    # Prepend "ask" to the arguments
+    sys.argv.insert(1, "ask")
+    app()
 
 
 if __name__ == "__main__":
-    app()
+    cli_main()

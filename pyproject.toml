@@ -44,7 +44,7 @@ dev = [
 ]
 
 [project.scripts]
-devassist = "devassist.cli.main:app"
+devassist = "devassist.cli.main:cli_main"
 
 [project.urls]
 Homepage = "https://github.com/singlarity-seekers/singlarity"
