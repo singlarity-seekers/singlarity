@@ -82,13 +82,15 @@ class ConfigManager:
         """
         config_dict = config.model_dump()
 
-        # AI config overrides
+        # AI config overrides (supports both AI_KEY and AI__KEY formats)
         ai_overrides: dict[str, Any] = {}
-        if project_id := os.environ.get(f"{self.ENV_PREFIX}AI_PROJECT_ID"):
+        if api_key := os.environ.get(f"{self.ENV_PREFIX}AI__API_KEY") or os.environ.get(f"{self.ENV_PREFIX}AI_API_KEY"):
+            ai_overrides["api_key"] = api_key
+        if project_id := os.environ.get(f"{self.ENV_PREFIX}AI__PROJECT_ID") or os.environ.get(f"{self.ENV_PREFIX}AI_PROJECT_ID"):
             ai_overrides["project_id"] = project_id
-        if location := os.environ.get(f"{self.ENV_PREFIX}AI_LOCATION"):
+        if location := os.environ.get(f"{self.ENV_PREFIX}AI__LOCATION") or os.environ.get(f"{self.ENV_PREFIX}AI_LOCATION"):
             ai_overrides["location"] = location
-        if model := os.environ.get(f"{self.ENV_PREFIX}AI_MODEL"):
+        if model := os.environ.get(f"{self.ENV_PREFIX}AI__MODEL") or os.environ.get(f"{self.ENV_PREFIX}AI_MODEL"):
             ai_overrides["model"] = model
 
         if ai_overrides:

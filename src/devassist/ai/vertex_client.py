@@ -1,12 +1,14 @@
 """Vertex AI client for DevAssist.
 
-Handles AI summarization using Google Cloud Vertex AI (Gemini).
+Handles AI summarization and tool calling using Google Cloud Vertex AI (Gemini).
 """
 
 import asyncio
-from typing import Any
+import json
+from typing import Any, Callable
 
 from devassist.ai.prompts import NO_ITEMS_SUMMARY, build_summarization_prompt, get_system_prompt
+from devassist.ai.tools import get_all_tools, get_tools_for_sources
 from devassist.models.context import ContextItem
 
 # Google Cloud AI imports - optional, checked at runtime
@@ -24,7 +26,7 @@ except ImportError:
 class VertexAIClient:
     """Client for Vertex AI Gemini model interactions."""
 
-    DEFAULT_MODEL = "gemini-1.5-flash"
+    DEFAULT_MODEL = "gemini-2.5-flash"
     DEFAULT_LOCATION = "us-central1"
     DEFAULT_MAX_RETRIES = 3
     DEFAULT_TIMEOUT = 60
@@ -214,3 +216,259 @@ class VertexAIClient:
             parts.append(f"Link: {item.url}")
 
         return "\n".join(parts)
+
+    # ==================== Function Calling ====================
+
+    async def chat_with_tools(
+        self,
+        message: str,
+        tool_executor: Callable[[str, dict[str, Any]], Any],
+        sources: list[str] | None = None,
+        context_items: list[ContextItem] | None = None,
+        max_tool_calls: int = 10,
+    ) -> str:
+        """Chat with the AI with function calling enabled.
+        
+        The AI can call tools to interact with context sources (Gmail, Slack, etc.)
+        and will automatically execute them via the tool_executor callback.
+        
+        Args:
+            message: User message/request.
+            tool_executor: Async callback to execute tools. Takes (tool_name, args) -> result.
+            sources: List of sources to enable tools for (gmail, slack, jira, github).
+                     If None, all tools are available.
+            context_items: Optional context items to include in the conversation.
+            max_tool_calls: Maximum number of tool calls allowed in a single conversation.
+            
+        Returns:
+            Final AI response after all tool calls are complete.
+        """
+        if not VERTEX_AI_AVAILABLE:
+            return "AI with tool calling unavailable. Please configure Vertex AI."
+
+        # Get tools for the specified sources
+        if sources:
+            tools = get_tools_for_sources(sources)
+        else:
+            tools = get_all_tools()
+
+        if not tools:
+            # No tools available, fall back to regular chat
+            return await self._generate_content(message)
+
+        # Build initial context
+        context_text = ""
+        if context_items:
+            context_parts = [self._format_item(item) for item in context_items[:20]]
+            context_text = "\n\n".join(context_parts)
+
+        # Convert tools to Gemini format
+        gemini_tools = self._convert_tools_to_gemini_format(tools)
+        
+        # Build conversation
+        conversation: list[dict[str, Any]] = []
+        
+        # Add context and user message
+        if context_text:
+            user_content = f"Current context from your sources:\n\n{context_text}\n\n---\n\nUser request: {message}"
+        else:
+            user_content = message
+            
+        conversation.append({"role": "user", "parts": [{"text": user_content}]})
+
+        # Tool calling loop
+        tool_calls_made = 0
+        
+        while tool_calls_made < max_tool_calls:
+            # Generate response with tools
+            response = await self._generate_with_tools(conversation, gemini_tools)
+            
+            # Check if model wants to call a function
+            function_calls = self._extract_function_calls(response)
+            
+            if not function_calls:
+                # No more function calls, return the text response
+                return self._extract_text_response(response)
+            
+            # Execute each function call
+            tool_results = []
+            for func_call in function_calls:
+                tool_name = func_call["name"]
+                tool_args = func_call.get("args", {})
+                
+                try:
+                    result = await self._execute_tool(tool_executor, tool_name, tool_args)
+                    tool_results.append({
+                        "name": tool_name,
+                        "response": {"result": result},
+                    })
+                except Exception as e:
+                    tool_results.append({
+                        "name": tool_name,
+                        "response": {"error": str(e)},
+                    })
+                
+                tool_calls_made += 1
+
+            # Add model response and tool results to conversation
+            conversation.append({
+                "role": "model",
+                "parts": response.candidates[0].content.parts,
+            })
+            
+            # Add function responses
+            function_response_parts = []
+            for result in tool_results:
+                function_response_parts.append({
+                    "function_response": {
+                        "name": result["name"],
+                        "response": result["response"],
+                    }
+                })
+            
+            conversation.append({
+                "role": "user",
+                "parts": function_response_parts,
+            })
+
+        # Max tool calls reached
+        return "I've reached the maximum number of tool calls. Here's what I found so far."
+
+    def _convert_tools_to_gemini_format(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Convert tool definitions to Gemini function declaration format.
+        
+        Args:
+            tools: List of tool definitions.
+            
+        Returns:
+            Gemini-formatted function declarations.
+        """
+        function_declarations = []
+        
+        for tool in tools:
+            func_decl = {
+                "name": tool["name"],
+                "description": tool["description"],
+                "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
+            }
+            function_declarations.append(func_decl)
+        
+        return [{"function_declarations": function_declarations}]
+
+    async def _generate_with_tools(
+        self,
+        conversation: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> Any:
+        """Generate response with function calling enabled.
+        
+        Args:
+            conversation: Conversation history.
+            tools: Tool definitions in Gemini format.
+            
+        Returns:
+            Gemini response object.
+        """
+        client = self._get_client()
+        
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: client.models.generate_content(
+                model=self.model,
+                contents=conversation,
+                config=types.GenerateContentConfig(
+                    system_instruction=self._get_tool_system_prompt(),
+                    temperature=0.2,
+                    tools=tools,
+                ),
+            ),
+        )
+        
+        return response
+
+    def _get_tool_system_prompt(self) -> str:
+        """Get system prompt for tool-enabled conversations."""
+        return """You are a helpful developer assistant with access to various tools for managing emails, messages, issues, and more.
+
+When the user asks you to do something, use the available tools to help them. You can:
+- Search and read emails from Gmail
+- Send emails and create drafts
+- Search Slack messages and send messages
+- Search and create JIRA issues
+- Search GitHub issues and PRs
+
+Be proactive in using tools to gather information before answering questions.
+When you perform actions (like sending an email), confirm what you did.
+If a tool call fails, explain what went wrong and suggest alternatives.
+
+Always be helpful, concise, and action-oriented."""
+
+    def _extract_function_calls(self, response: Any) -> list[dict[str, Any]]:
+        """Extract function calls from Gemini response.
+        
+        Args:
+            response: Gemini response object.
+            
+        Returns:
+            List of function call dicts with name and args.
+        """
+        function_calls = []
+        
+        if not response.candidates:
+            return function_calls
+            
+        for part in response.candidates[0].content.parts:
+            if hasattr(part, "function_call") and part.function_call:
+                fc = part.function_call
+                function_calls.append({
+                    "name": fc.name,
+                    "args": dict(fc.args) if fc.args else {},
+                })
+        
+        return function_calls
+
+    def _extract_text_response(self, response: Any) -> str:
+        """Extract text response from Gemini response.
+        
+        Args:
+            response: Gemini response object.
+            
+        Returns:
+            Text content from the response.
+        """
+        if not response.candidates:
+            return "No response generated."
+            
+        text_parts = []
+        for part in response.candidates[0].content.parts:
+            if hasattr(part, "text") and part.text:
+                text_parts.append(part.text)
+        
+        return "\n".join(text_parts) if text_parts else "No text response."
+
+    async def _execute_tool(
+        self,
+        tool_executor: Callable[[str, dict[str, Any]], Any],
+        tool_name: str,
+        tool_args: dict[str, Any],
+    ) -> Any:
+        """Execute a tool via the provided executor.
+        
+        Args:
+            tool_executor: Callback to execute tools.
+            tool_name: Name of the tool to execute.
+            tool_args: Arguments for the tool.
+            
+        Returns:
+            Tool execution result.
+        """
+        # Check if executor is async
+        if asyncio.iscoroutinefunction(tool_executor):
+            return await tool_executor(tool_name, tool_args)
+        else:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                None,
+                lambda: tool_executor(tool_name, tool_args)
+            )
