@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Singlarity** (DevAssist) is a Python CLI application that aggregates context from multiple developer tools (Gmail, Slack, JIRA, GitHub) and uses GCP Vertex AI (Gemini) to generate a Unified Morning Brief and productivity features. The project is in active development with implementation in the `python-cli` branch.
+**Singlarity** (DevAssist) is a Python CLI application that aggregates context from multiple developer tools (Gmail, Slack, JIRA, GitHub) and uses **Claude Agent SDK** to generate intelligent morning briefs. The project uses **Model Context Protocol (MCP) servers** for context sources and features a **unified AppConfig architecture** with **static session management**.
 
 ## Development Commands
 
@@ -63,80 +63,82 @@ ruff format src/
 ### Running the CLI
 
 ```bash
-# Show version
+# Show version and current configuration
 devassist --version
-
-# Check status
 devassist status
 
-# Configure context sources (interactive prompts)
+# Configure through config files and environment variables
 # Workspace directory (~/.devassist/) is created automatically
-devassist config add gmail
-devassist config add slack
-devassist config add jira
-devassist config add github
-devassist config list
-devassist config test
+# Create ~/.devassist/config.yaml with your settings
+export JIRA_URL="https://yourcompany.atlassian.net"
+export JIRA_API_TOKEN="your-token"
 
 # Generate morning brief
 devassist brief
-devassist brief --refresh  # bypass cache
-devassist brief --json     # JSON output
+devassist brief --sources gmail,slack     # specific sources
+devassist brief --model "Opus 4"         # user-friendly AI model names
+devassist brief --resume                 # continue previous conversation
+devassist brief --session-id session-123 # use specific session
+
+# Session management
+devassist brief sessions                 # list recent sessions
+devassist brief clean --days 7          # clean old sessions
+devassist brief clear session-123       # clear specific session
 ```
 
 ## Architecture
 
-### High-Level Structure
+### Modern Unified Structure
 
 ```
 src/devassist/
+├── ai/          # Claude Agent SDK integration
 ├── cli/         # Typer CLI commands (presentation layer)
-├── core/        # Business logic (aggregator, ranker, brief_generator)
-├── adapters/    # Context source adapters (gmail, slack, jira, github)
-├── ai/          # Vertex AI integration for summarization
-├── preferences/ # Preference learning system
-└── models/      # Pydantic data models
+├── core/        # Business logic (brief_generator)
+├── models/      # Pydantic data models (config_unified, brief, context)
+├── resources/   # System prompts, MCP server configurations
+└── utils/       # Utility functions
 ```
 
-### Separation of Concerns (SOLID Principles)
+### Key Architectural Principles
 
-The architecture follows strict separation to enable future UI extensions (web app, Slack bot) without duplicating business logic:
+The architecture follows modern patterns for maintainability and extensibility:
 
-1. **CLI Layer** (`cli/`): Typer commands, Rich output formatting, user interaction
-2. **Core Services** (`core/`):
-   - `aggregator.py` - Fetches context from all sources (SRP: fetch only)
-   - `ranker.py` - Scores and sorts items by relevance (SRP: ranking only)
-   - `brief_generator.py` - Orchestrates the full brief generation flow (SRP: coordination)
-   - `config_manager.py` - Configuration and workspace management
-   - `cache_manager.py` - 15-minute TTL caching
-3. **Adapters** (`adapters/`): All implement `ContextSourceAdapter` contract (OCP: extend without modifying)
-4. **AI Layer** (`ai/`): Vertex AI client and prompt templates
+1. **Unified Configuration**: Single `AppConfig` class handles all configuration needs
+2. **Self-Contained Components**: Each component manages its own state and dependencies
+3. **Static Session Management**: Sessions persist across component instances
+4. **MCP Integration**: Uses industry-standard Model Context Protocol servers
+### Core Components
 
-### Plugin Architecture for Context Sources
+1. **AppConfig** (`models/config_unified.py`): Unified configuration with smart deserialization
+2. **ClaudeClient** (`ai/claude_client.py`): Claude Agent SDK wrapper with static session management
+3. **BriefGenerator** (`core/brief_generator.py`): Orchestrates brief generation workflow
 
-All adapters implement the `ContextSourceAdapter` abstract base class defined in `src/devassist/adapters/base.py`. The contract specifies:
+### MCP Integration
 
-- `authenticate(config)` - OAuth2 or API token authentication
-- `test_connection()` - Health check
-- `fetch_items(limit, **kwargs)` - Yields `ContextItem` objects
-- `get_required_config_fields()` - Returns configuration requirements
+Context sources are accessed through **Model Context Protocol (MCP) servers** configured in `resources/mcp_servers.yaml`:
 
-See `specs/001-dev-assistant-cli/contracts/context-source.md` for the full contract specification.
+- **Gmail**: OAuth2-based email access
+- **Slack**: Bot/user token integration
+- **JIRA**: API token authentication
+- **GitHub**: Personal access token
+
+Each MCP server handles its own authentication and data fetching.
 
 ### Data Flow: Morning Brief Generation
 
 ```
 User runs `devassist brief`
     ↓
-CLI (brief.py) → BriefGenerator (orchestrator)
+CLI (brief.py) → AppConfig (unified configuration)
     ↓
-ContextAggregator → fetches from all adapters in parallel
+BriefGenerator (orchestrator) → ClaudeClient (AI integration)
     ↓
-RelevanceRanker → scores items (preferences + recency + metadata)
+Claude Agent SDK → MCP Servers (context fetching)
     ↓
-VertexAIClient → generates summary with Gemini
+Claude API → AI processing and summarization
     ↓
-Brief model → sections grouped by source
+Brief model → structured response
     ↓
 Rich Console → formatted terminal output
 ```
@@ -154,19 +156,18 @@ All data is stored locally in `~/.devassist/`:
 
 ```
 ~/.devassist/
-├── config.yaml          # User configuration (includes credentials in dev mode)
-├── cache/               # Source-specific caches (15-min TTL)
-│   ├── gmail/
-│   ├── slack/
-│   ├── jira/
-│   └── github/
-├── briefs/              # Historical briefs
-└── preferences.json     # Learned user preferences (planned)
+├── config.yaml          # User configuration (YAML format)
+└── briefs/              # Historical briefs (planned)
 ```
 
-**Workspace Creation**: The `~/.devassist/` directory is created automatically by `ConfigManager` when it's first instantiated (see `src/devassist/core/config_manager.py:33-35`). There is no separate `init` command - the workspace is created on first use of any command.
+**Key Changes from Legacy:**
+- **No cache directory**: MCP servers handle their own caching
+- **No session persistence**: Sessions are in-memory only (static store)
+- **Simplified structure**: Only configuration and optional brief history
 
-**Security Note**: In dev mode, credentials are stored in plain text. Production deployments should use OS-native credential storage.
+**Workspace Creation**: The `~/.devassist/` directory is created automatically by `AppConfig` when first accessed. No separate `init` command needed.
+
+**Security**: Use environment variables for credentials in production. Configuration files should only contain non-sensitive settings.
 
 ## Development Workflow
 
@@ -183,18 +184,21 @@ All new features require:
 - Integration tests in `tests/integration/` (test real API interactions, marked with `@pytest.mark.integration`)
 - Minimum 80% code coverage for `src/devassist/`
 
-### Implementing a New Context Source Adapter
+### Adding a New Context Source (MCP-Based)
 
-1. Write failing contract test in `tests/contract/test_context_source_contract.py`
-2. Write failing integration test in `tests/integration/test_<source>_adapter.py`
-3. Implement adapter in `src/devassist/adapters/<source>.py`:
-   - Inherit from `ContextSourceAdapter`
-   - Implement all abstract methods
-   - Handle authentication (OAuth2 or API tokens)
-   - Transform source data to `ContextItem` format
-   - Set relevance scores (0.0-1.0)
-   - Handle errors: `AuthenticationError`, `SourceUnavailableError`, `RateLimitError`
-4. Add to `SourceType` enum in `src/devassist/models/context.py`
+1. **Create MCP Server**: Implement or find an existing MCP server for your source
+2. **Add MCP Configuration**: Update `src/devassist/resources/mcp_servers.yaml`:
+   ```yaml
+   newsource:
+     command: "mcp-server-newsource"
+     env:
+       NEWSOURCE_API_TOKEN: "${NEWSOURCE_API_TOKEN}"
+   ```
+3. **Update SourceType**: Add to enum in `src/devassist/models/context.py`
+4. **Configure Environment Mapping**: Add to `AppConfig._get_mcp_servers_config()` for env var substitution
+5. **Test Integration**: Write integration tests for the new source
+
+**No custom adapter code needed!** MCP servers handle all the integration complexity.
 5. Register in CLI config commands
 
 ### Error Handling Requirements
@@ -216,33 +220,40 @@ The codebase uses modern Python features:
 - `str | None` instead of `Optional[str]`
 - Strict mypy checking enabled
 
-### Asynchronous I/O
+### Claude Agent SDK Integration
 
-All adapter fetch operations are async (`async def fetch_items()`) to enable parallel fetching from multiple sources. Use `httpx` for HTTP clients (not `requests`).
+The project uses **Claude Agent SDK** for AI interactions:
+- **Brief summarization**: Generate intelligent morning briefs
+- **Conversation continuity**: Session-based interactions
+- **MCP server coordination**: Automatic context aggregation
+
+ClaudeClient handles all SDK complexity and provides a simple interface:
+```python
+client = ClaudeClient(config)
+response = await client.make_call("Generate my morning brief")
+```
 
 ### Pydantic for Data Validation
 
-All data models use Pydantic v2 for validation, serialization, and configuration management.
+All data models use Pydantic v2 for:
+- Configuration validation and smart deserialization
+- Data model validation
+- Environment variable handling
 
 ### Rich for Terminal Output
 
 Use Rich library for all CLI output:
-- Tables for structured data
-- Panels for summaries
-- Progress bars for multi-source fetching
-- Styled text for errors/warnings
+- Tables for session listings
+- Panels for brief summaries
+- Styled text for status and errors
+- Markdown rendering for AI responses
 
-### GCP Vertex AI Integration
+### Asynchronous Operations
 
-The project uses GCP Vertex AI (Gemini model) for:
-- Brief summarization
-- Item categorization
-- Draft response generation
-
-Authentication via Application Default Credentials:
-```bash
-gcloud auth application-default login
-gcloud config set project YOUR_PROJECT_ID
+Key async operations:
+- `ClaudeClient.make_call()` - AI interactions
+- `ClaudeClient.create_session()` - Session initialization
+- `BriefGenerator.generate()` - Brief orchestration
 ```
 
 ## Specification-First Workflow
@@ -265,38 +276,49 @@ When implementing features:
 ## Important Constraints
 
 - **Performance**: Morning brief generation must complete in < 60 seconds for 4 sources
-- **Cache TTL**: 15 minutes for all context data
-- **Coverage**: Minimum 80% test coverage for core and adapter modules
-- **Token Limits**: AI prompts must stay within model token limits
-- **Single User**: This version is designed for single-user local execution (no multi-user support)
+- **Sessions**: In-memory only (don't survive process restarts)
+- **Coverage**: Minimum 80% test coverage for core modules
+- **Token Limits**: AI prompts must stay within Claude model token limits
+- **Single User**: Designed for single-user local execution (no multi-user support)
+- **MCP Dependency**: Requires properly configured MCP servers for context sources
 
 ## Project Status
 
-Current development is in the `python-cli` branch. Active work includes:
+**Current Architecture: Unified & Modernized**
 
-- ✅ Project structure and foundational infrastructure
-- ✅ Core models and configuration management
-- ✅ Base adapter contract
-- ✅ Brief generation orchestration with AI integration
-- 🚧 Context source adapter implementations (Gmail, Slack, JIRA, GitHub)
-- ⏳ Preference learning system (planned)
-- ⏳ EC2 sandbox management (planned)
-- ⏳ Auto-response drafting (planned)
+- ✅ **Phase 1**: Unified AppConfig with smart deserialization
+- ✅ **Phase 2**: Self-contained ClaudeClient with static session management
+- ✅ **Phase 3**: Deprecated manager classes removed
+- ✅ **Core Infrastructure**: Claude Agent SDK integration
+- ✅ **Configuration**: User-friendly model names and auto-discovery
+- ✅ **Brief Generation**: Full workflow with Claude Agent SDK
+- ✅ **Session Management**: Persistent conversations across CLI calls
+- ✅ **MCP Integration**: Industry-standard context server protocol
+- ✅ **Testing**: 45+ comprehensive tests covering new architecture
+- ⏳ **MCP Server Deployment**: Actual server implementations (planned)
+- ⏳ **Preference Learning**: User priority learning (planned)
+- ⏳ **Advanced Features**: EC2 management, auto-responses (planned)
 
-See `specs/001-dev-assistant-cli/tasks.md` for detailed task tracking.
+## Current Implementation Status
 
-## Implemented vs Planned Features
+### ✅ **Fully Implemented**
+- `devassist status` - Show unified configuration status
+- `devassist brief` - Generate morning brief with Claude
+- `devassist brief sessions` - List and manage conversation sessions
+- `devassist brief clean/clear` - Session cleanup
+- Session resumption and conversation continuity
+- User-friendly AI model configuration
+- Environment variable and file-based configuration
 
-### Currently Implemented
-- `devassist status` - Show configuration status
-- `devassist config add/list/remove/test` - Manage context sources (interactive setup)
-- `devassist brief` - Generate morning brief with AI summarization
+### 🚧 **Partially Implemented**
+- MCP server configurations (defined but servers need deployment)
+- Legacy config commands (show deprecation notices)
 
-### Planned (Not Yet Implemented)
-- `devassist prefs` - Preference management
-- `devassist ai` - AI service management
-- `devassist sandbox` - EC2 instance management
-- Quarterly notes generation
+### ⏳ **Planned Features**
+- Live MCP server deployments
+- Preference learning system
+- Quarterly contribution summaries
+- EC2 sandbox management
 - Auto-response drafting
 
-When documenting or discussing features, clearly distinguish between what's implemented and what's planned.
+**Architecture is complete and ready for MCP server integration!**

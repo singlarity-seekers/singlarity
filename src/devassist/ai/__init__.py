@@ -3,6 +3,6 @@
 Contains AI service integrations for summarization.
 """
 
-from devassist.ai.vertex_client import VertexAIClient
+from devassist.ai.claude_client import ClaudeClient
 
-__all__ = ["VertexAIClient"]
+__all__ = ["ClaudeClient"]

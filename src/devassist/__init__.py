@@ -8,11 +8,12 @@ __version__ = "0.1.0"
 __author__ = "kami619"
 __email__ = "kakella@redhat.com"
 
-from devassist.models.context import ContextItem, ContextSource, SourceType
+from devassist.models.context import SourceType
 
 __all__ = [
     "__version__",
-    "ContextItem",
-    "ContextSource",
     "SourceType",
+    # Legacy models removed - not used in MCP-based architecture:
+    # - "ContextItem": Replaced by direct Claude API aggregation via MCP
+    # - "ContextSource": Replaced by McpServerConfig + MCP servers
 ]

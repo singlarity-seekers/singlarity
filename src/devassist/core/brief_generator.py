@@ -1,209 +1,300 @@
-"""Brief generator for DevAssist.
+"""Brief generator for DevAssist (refactored for Claude Agent SDK).
 
-Orchestrates aggregation, ranking, and AI summarization to create morning briefs.
+Uses ClaudeClient to generate morning briefs via MCP servers.
 """
 
+import asyncio
+import logging
 from datetime import datetime
-from typing import Any
 
-from devassist.ai.vertex_client import VertexAIClient
-from devassist.core.aggregator import ContextAggregator
-from devassist.core.cache_manager import CacheManager
-from devassist.core.config_manager import ConfigManager
-from devassist.core.ranker import RelevanceRanker
-from devassist.models.brief import Brief, BriefItem, BriefSection
-from devassist.models.context import ContextItem, SourceType
+from devassist.ai.claude_client import ClaudeClient
+from devassist.models.brief import Brief, BriefSection
+from devassist.models.config import ClientConfig
+from devassist.models.context import SourceType
+
+logger = logging.getLogger(__name__)
 
 
 class BriefGenerator:
-    """Generates Unified Morning Briefs from aggregated context."""
+    """Generates Unified Morning Briefs using Claude Agent SDK.
 
-    CACHE_KEY = "brief:latest"
+    Now uses unified ClientConfig and self-contained ClaudeClient for session management.
+    """
 
     def __init__(
         self,
-        config_manager: ConfigManager | None = None,
-        aggregator: ContextAggregator | None = None,
-        ranker: RelevanceRanker | None = None,
-        ai_client: VertexAIClient | None = None,
-        cache: CacheManager | None = None,
+        config: ClientConfig | None = None,
+        claude_client: ClaudeClient | None = None,
     ) -> None:
         """Initialize BriefGenerator.
 
         Args:
-            config_manager: Configuration manager.
-            aggregator: Context aggregator.
-            ranker: Relevance ranker.
-            ai_client: AI client for summarization.
-            cache: Cache manager.
+            config: Application configuration (uses defaults if None).
+            claude_client: Claude client for API calls (creates new if None).
         """
-        self._config_manager = config_manager or ConfigManager()
-        self._aggregator = aggregator or ContextAggregator(self._config_manager)
-        self._cache = cache or CacheManager()
-
-        # Load preferences for ranker
-        config = self._config_manager.load_config()
-        priority_keywords = config.preferences.priority_keywords
-
-        self._ranker = ranker or RelevanceRanker(priority_keywords=priority_keywords)
-
-        # Initialize AI client with config
-        self._ai_client = ai_client or VertexAIClient(
-            project_id=config.ai.project_id,
-            location=config.ai.location,
-            model=config.ai.model,
-            max_retries=config.ai.max_retries,
-            timeout_seconds=config.ai.timeout_seconds,
-        )
+        self._config = config or ClientConfig()
+        self._claude_client = claude_client or ClaudeClient(config=self._config)
 
     async def generate(
         self,
         sources: list[SourceType] | None = None,
         refresh: bool = False,
+        user_prompt: str | None = None,
+        session_id: str | None = None,
     ) -> Brief:
         """Generate a morning brief.
 
         Args:
             sources: Optional list of sources to include.
-            refresh: If True, bypass cache and fetch fresh data.
+            refresh: If True, start a new session instead of resuming.
+            session_id: Specific session ID to resume.
 
         Returns:
             Generated Brief object.
         """
-        if refresh:
-            self._cache.clear_all()
+        # Determine which resources to use
+        if sources:
+            resources = [s.value for s in sources]
+        else:
+            # Use all enabled sources from unified config
+            resources = [source.value for source in self._config.enabled_sources]
 
-        # Fetch from all configured sources
-        items = await self._aggregator.fetch_all(sources=sources)
+        # Build the prompt for Claude
+        prompt = user_prompt or self._build_brief_prompt(resources)
 
-        # Rank items by relevance
-        ranked_items = self._ranker.rank(items)
+        # Make the call to Claude
+        try:
+            # Determine session handling
+            if refresh or not session_id:
+                # Use current session (auto-created)
+                response = await self._claude_client.make_call(user_prompt=prompt)
+            else:
+                # Resume existing session
+                response = await self._claude_client.make_call(
+                    user_prompt=prompt, session_id=session_id
+                )
 
-        # Group by source
-        sections = self._group_by_source(ranked_items)
+            # Get the active session for metadata
+            latest_session = self._claude_client.get_latest_session()
 
-        # Generate AI summary
-        summary = await self._generate_summary(ranked_items)
+            # Parse response into Brief object
+            brief = self._parse_response_to_brief(response, resources)
 
-        # Build the brief
+            # Store session_id in brief metadata if needed
+            if latest_session:
+                brief.metadata = {"session_id": latest_session.session_id}
+
+            return brief
+
+        except Exception as e:
+            logger.error(f"Failed to generate brief: {e}")
+
+            # Return error brief
+            return Brief(
+                summary=f"Failed to generate brief: {str(e)}",
+                sections=[],
+                generated_at=datetime.now(),
+                total_items=0,
+                sources_queried=[],
+                sources_failed=resources,
+            )
+
+    def _build_brief_prompt(self, resources: list[str]) -> str:
+        """Build the prompt for morning brief generation.
+
+        Args:
+            resources: List of resource names.
+
+        Returns:
+            Prompt string.
+        """
+        resources_str = ", ".join(resources)
+
+        return f"""Generate my daily morning brief by aggregating information from {resources_str}.
+
+Please organize the brief with these sections:
+
+1. **Top Priorities**: Items requiring immediate attention today
+2. **Action Items**: Explicit next steps across all sources
+3. **Blockers & Urgent**: Issues preventing progress or time-sensitive matters
+4. **Code Reviews**: PRs awaiting my review or feedback on my PRs
+5. **Communications**: Important emails, messages, or meeting requests
+6. **Context & FYI**: Relevant updates that don't require immediate action
+
+For each section, include:
+- Clear, concise summaries
+- Relevant links
+- Priority indicators where appropriate
+
+Focus on items from the last 24-48 hours unless they are ongoing priorities.
+"""
+
+    def _parse_response_to_brief(self, response: str, resources: list[str]) -> Brief:
+        """Parse Claude's response into a Brief object.
+
+        Args:
+            response: Claude's markdown response.
+            resources: List of resources queried.
+
+        Returns:
+            Brief object.
+        """
+        # For now, we'll create a simple brief with the response as summary
+        # In a full implementation, we could parse the markdown sections
+
+        # Create sections (placeholder - could be parsed from response)
+        sections = []
+
+        # Try to map resources to SourceType
+        source_types = []
+        for resource in resources:
+            try:
+                source_types.append(SourceType(resource))
+            except ValueError:
+                logger.warning(f"Unknown source type: {resource}")
+
+        # Create brief
         brief = Brief(
-            summary=summary,
+            summary=response,
             sections=sections,
             generated_at=datetime.now(),
-            total_items=len(ranked_items),
-            sources_queried=[s for s in SourceType if self._is_source_configured(s)],
-            sources_failed=self._aggregator.failed_sources,
+            total_items=0,  # We don't have individual items anymore
+            sources_queried=source_types,
+            sources_failed=[],
         )
 
         return brief
 
-    def _group_by_source(self, items: list[ContextItem]) -> list[BriefSection]:
-        """Group items by source type into sections.
+    async def resume_brief_session(self, session_id: str, follow_up: str) -> str:
+        """Resume a brief session with a follow-up question.
 
         Args:
-            items: Ranked context items.
+            session_id: Session ID to resume.
+            follow_up: Follow-up question or request.
 
         Returns:
-            List of BriefSections.
-        """
-        # Group items by source
-        grouped: dict[SourceType, list[ContextItem]] = {}
-        for item in items:
-            if item.source_type not in grouped:
-                grouped[item.source_type] = []
-            grouped[item.source_type].append(item)
-
-        # Create sections
-        sections = []
-        for source_type, source_items in grouped.items():
-            brief_items = [BriefItem.from_context_item(item) for item in source_items]
-
-            section = BriefSection(
-                source_type=source_type,
-                display_name=self._get_display_name(source_type),
-                items=brief_items,
-                item_count=len(brief_items),
-            )
-            sections.append(section)
-
-        # Sort sections by total relevance
-        sections.sort(
-            key=lambda s: sum(i.relevance_score for i in s.items),
-            reverse=True,
-        )
-
-        return sections
-
-    async def _generate_summary(self, items: list[ContextItem]) -> str:
-        """Generate AI summary of items.
-
-        Args:
-            items: Ranked context items.
-
-        Returns:
-            Summary string.
+            Claude's response.
         """
         try:
-            return await self._ai_client.summarize(items)
-        except Exception as e:
-            # Graceful degradation when AI is unavailable
-            return self._generate_fallback_summary(items, str(e))
+            response = await self._claude_client.make_call(
+                user_prompt=follow_up, session_id=session_id
+            )
+            return response
+        except ValueError as e:
+            logger.error(f"Failed to resume session: {e}")
+            raise
 
-    def _generate_fallback_summary(
-        self,
-        items: list[ContextItem],
-        error_msg: str,
-    ) -> str:
-        """Generate a fallback summary when AI is unavailable.
+    def list_recent_sessions(self, limit: int = 10) -> list:
+        """List recent brief sessions.
 
         Args:
-            items: Context items.
-            error_msg: Error message from AI failure.
+            limit: Maximum number of sessions to return.
 
         Returns:
-            Fallback summary string.
+            List of session metadata dicts.
         """
-        if not items:
-            return "No new items to review."
+        # Get all sessions from ClaudeClient and sort by last_used
+        all_sessions = self._claude_client.list_sessions()
+        sorted_sessions = sorted(all_sessions, key=lambda s: s.last_used, reverse=True)
 
-        # Count by source
-        source_counts: dict[str, int] = {}
-        for item in items:
-            name = item.source_type.value.title()
-            source_counts[name] = source_counts.get(name, 0) + 1
+        # Apply limit
+        recent_sessions = sorted_sessions[:limit] if limit else sorted_sessions
 
-        counts_str = ", ".join(f"{count} from {name}" for name, count in source_counts.items())
+        return [
+            {
+                "session_id": s.session_id,
+                "created_at": s.created_at.isoformat(),
+                "last_used": s.last_used.isoformat(),
+                "resources": s.resources,
+                "turns": s.turns,
+            }
+            for s in recent_sessions
+        ]
 
-        return (
-            f"AI summarization unavailable. Manual review recommended.\n\n"
-            f"You have {len(items)} items to review: {counts_str}.\n\n"
-            f"(AI error: {error_msg[:100]})"
+
+async def main():
+    """Main method for debugging BriefGenerator in IDE.
+
+    This allows you to run the brief generator directly for debugging purposes.
+    Make sure to set your environment variables for JIRA and GitHub access:
+
+    export JIRA_URL="https://your-jira-instance.com"
+    export JIRA_USERNAME="your-email@company.com"
+    export JIRA_PERSONAL_TOKEN="your-jira-token"
+    export GITHUB_TOKEN="your-github-token"
+    """
+    try:
+        print("🚀 Starting DevAssist Brief Generator (Debug Mode)")
+        print("=" * 60)
+
+        # Create configuration
+        config = ClientConfig()
+        print(f"📋 Configuration:")
+        print(f"   • AI Model: {config.ai_model}")
+        print(f"   • Enabled Sources: {[s.value for s in config.enabled_sources]}")
+        print(f"   • Workspace: {config.workspace_dir}")
+        print()
+
+        # Create brief generator
+        generator = BriefGenerator(config)
+        print("🤖 Created BriefGenerator instance")
+
+        # Generate brief
+        print("📊 Generating morning brief...")
+        brief = await generator.generate(
+            sources=config.enabled_sources,
+            user_prompt=None,  # Use default prompt
+            session_id=None  # Create new session
         )
 
-    def _get_display_name(self, source_type: SourceType) -> str:
-        """Get display name for a source type.
+        print("✅ Brief generated successfully!")
+        print("=" * 60)
 
-        Args:
-            source_type: Source type enum.
+        # Display brief details
+        print(f"📄 Brief Summary:")
+        print(f"   • Generated at: {brief.generated_at}")
+        print(f"   • Total items: {brief.total_items}")
+        print(f"   • Sources queried: {[s.value for s in brief.sources_queried]}")
+        print(f"   • Sources failed: {brief.sources_failed}")
+        print(f"   • Session ID: {brief.metadata.get('session_id', 'None')}")
+        print()
 
-        Returns:
-            Human-readable name.
-        """
-        display_names = {
-            SourceType.GMAIL: "Gmail",
-            SourceType.SLACK: "Slack",
-            SourceType.JIRA: "JIRA",
-            SourceType.GITHUB: "GitHub",
-        }
-        return display_names.get(source_type, source_type.value.title())
+        # Display brief content
+        print("📝 Brief Content:")
+        print("-" * 40)
+        print(brief.summary)
+        print("-" * 40)
 
-    def _is_source_configured(self, source_type: SourceType) -> bool:
-        """Check if a source type is configured.
+        # Display sections
+        if brief.sections:
+            print(f"📂 Sections ({len(brief.sections)}):")
+            for section in brief.sections:
+                print(f"   • {section.display_name}: {section.item_count} items")
 
-        Args:
-            source_type: Source type to check.
+        print("\n🎉 Debug session complete!")
 
-        Returns:
-            True if configured.
-        """
-        return source_type.value in self._config_manager.list_sources()
+    except Exception as e:
+        print(f"❌ Error during brief generation:")
+        print(f"   {type(e).__name__}: {e}")
+        logger.exception("Brief generation failed in debug mode")
+
+        # Show configuration for debugging
+        try:
+            config = ClientConfig()
+            mcp_config = config.get_mcp_servers_config()
+            print(f"\n🔧 MCP Configuration Debug:")
+            for name, conf in mcp_config.items():
+                print(f"   • {name}: {conf.get('description', 'No description')}")
+        except Exception as config_e:
+            print(f"   Failed to load MCP config: {config_e}")
+
+        raise
+
+
+if __name__ == "__main__":
+    # Run the main function for debugging
+    print("🐛 DevAssist Brief Generator - Debug Mode")
+    print("Make sure you have set the required environment variables!")
+    print()
+
+    asyncio.run(main())

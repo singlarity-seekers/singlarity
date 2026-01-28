@@ -8,11 +8,11 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from devassist.models.context import ContextItem, SourceType
+from devassist.models.context import SourceType
 
 
 class BriefItem(BaseModel):
-    """A single item in the brief, derived from a ContextItem."""
+    """A single item in the brief."""
 
     id: str = Field(..., description="Original item ID")
     source_type: SourceType = Field(..., description="Source of this item")
@@ -23,27 +23,8 @@ class BriefItem(BaseModel):
     author: str | None = Field(None, description="Who created/sent item")
     timestamp: datetime = Field(..., description="When item was created")
 
-    @classmethod
-    def from_context_item(cls, item: ContextItem, summary: str | None = None) -> "BriefItem":
-        """Create a BriefItem from a ContextItem.
-
-        Args:
-            item: Source ContextItem.
-            summary: Optional AI-generated summary.
-
-        Returns:
-            New BriefItem instance.
-        """
-        return cls(
-            id=item.id,
-            source_type=item.source_type,
-            title=item.title,
-            summary=summary or item.content[:200] if item.content else None,
-            relevance_score=item.relevance_score,
-            url=item.url,
-            author=item.author,
-            timestamp=item.timestamp,
-        )
+    # Legacy method removed - not used in MCP-based architecture
+    # from_context_item: Replaced by direct Claude API aggregation via MCP
 
 
 class BriefSection(BaseModel):
@@ -77,6 +58,10 @@ class Brief(BaseModel):
     sources_failed: list[str] = Field(
         default_factory=list,
         description="Sources that failed to respond",
+    )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional metadata (e.g., session_id)",
     )
 
     @property

@@ -1,18 +1,16 @@
 """Core module for DevAssist.
 
-Contains the core services and managers.
+Contains the core services. Legacy manager classes have been deprecated
+in favor of the unified ClientConfig and self-contained ClaudeClient architecture.
 """
 
-from devassist.core.aggregator import ContextAggregator
 from devassist.core.brief_generator import BriefGenerator
-from devassist.core.cache_manager import CacheManager
-from devassist.core.config_manager import ConfigManager
-from devassist.core.ranker import RelevanceRanker
+
+# Legacy managers removed in favor of unified architecture:
+# - CacheManager → utility functions in devassist.utils.cache
+# - ConfigManager → devassist.models.config.ClientConfig
+# - SessionManager → ClaudeClient static session store
 
 __all__ = [
-    "CacheManager",
-    "ConfigManager",
-    "ContextAggregator",
-    "RelevanceRanker",
     "BriefGenerator",
 ]

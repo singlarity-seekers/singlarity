@@ -2,18 +2,15 @@
 
 from devassist.models.context import (
     ConnectionStatus,
-    ContextItem,
-    ContextSource,
     SourceType,
 )
-from devassist.models.config import AIConfig, AppConfig, SourceConfig
+from devassist.models.mcp_config import McpServerConfig
 
 __all__ = [
     "ConnectionStatus",
-    "ContextItem",
-    "ContextSource",
     "SourceType",
-    "AIConfig",
-    "AppConfig",
-    "SourceConfig",
+    "McpServerConfig",
+    # Legacy models removed - not used in MCP-based architecture:
+    # - ContextSource: Replaced by McpServerConfig + MCP servers
+    # - ContextItem: Replaced by direct Claude API aggregation via MCP
 ]
