@@ -244,6 +244,10 @@ Authentication via Application Default Credentials:
 gcloud auth application-default login
 gcloud config set project YOUR_PROJECT_ID
 ```
+or via API key:
+```bash
+export DEVASSIST_AI__API_KEY=your-api-key
+```
 
 ## Specification-First Workflow
 
