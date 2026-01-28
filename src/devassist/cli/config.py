@@ -15,6 +15,7 @@ from rich.table import Table
 from devassist.adapters import get_adapter, list_available_adapters
 from devassist.adapters.errors import AuthenticationError, SourceUnavailableError
 from devassist.core.config_manager import ConfigManager
+from devassist.mcp.config import MCPConfigLoader, MCPServerConfig
 from devassist.models.context import SourceType
 
 # Create router for config commands
@@ -263,3 +264,403 @@ def test_source(
     # Exit with error if any tests failed
     if any(not success for _, success, _ in results):
         raise typer.Exit(1)
+
+
+# MCP subcommand group
+mcp_app = typer.Typer(
+    name="mcp",
+    help="Manage MCP (Model Context Protocol) server configurations.",
+    no_args_is_help=True,
+)
+app.add_typer(mcp_app, name="mcp")
+
+
+# Available MCP server templates
+MCP_SERVER_TEMPLATES = {
+    "github": {
+        "display_name": "GitHub",
+        "type": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "env_vars": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
+        "description": "GitHub notifications, PRs, and issues",
+    },
+    "slack": {
+        "display_name": "Slack",
+        "type": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-slack"],
+        "env_vars": ["SLACK_BOT_TOKEN", "SLACK_TEAM_ID"],
+        "description": "Slack messages and mentions",
+    },
+    "jira": {
+        "display_name": "JIRA",
+        "type": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-atlassian"],
+        "env_vars": ["ATLASSIAN_URL", "ATLASSIAN_EMAIL", "ATLASSIAN_API_TOKEN"],
+        "description": "JIRA issues and tasks",
+    },
+}
+
+
+@mcp_app.command("add")
+def mcp_add(
+    server: str = typer.Argument(
+        ...,
+        help="MCP server to add (github, slack, jira) or 'custom' for manual config",
+    ),
+) -> None:
+    """Add an MCP server configuration.
+
+    Guides through the setup for connecting to an MCP server.
+    Environment variables are used for sensitive values.
+    """
+    show_security_warning()
+    console.print()
+
+    loader = MCPConfigLoader()
+    server_name = server.lower()
+
+    if server_name == "custom":
+        # Custom server configuration
+        console.print("[bold]Custom MCP Server Configuration[/bold]\n")
+
+        name = Prompt.ask("Server name (e.g., 'myserver')")
+        server_type = Prompt.ask("Server type", choices=["stdio", "http", "sse"], default="stdio")
+
+        if server_type == "stdio":
+            command = Prompt.ask("Command to run (e.g., 'npx')")
+            args_str = Prompt.ask("Arguments (comma-separated)", default="")
+            args = [a.strip() for a in args_str.split(",") if a.strip()]
+
+            env_str = Prompt.ask("Environment variables (KEY=value, comma-separated)", default="")
+            env = {}
+            for pair in env_str.split(","):
+                if "=" in pair:
+                    key, val = pair.split("=", 1)
+                    env[key.strip()] = val.strip()
+
+            server_config = MCPServerConfig(
+                type="stdio",
+                command=command,
+                args=args,
+                env=env,
+                enabled=True,
+            )
+        else:
+            url = Prompt.ask("Server URL")
+            headers_str = Prompt.ask("Headers (Key:Value, comma-separated)", default="")
+            headers = {}
+            for pair in headers_str.split(","):
+                if ":" in pair:
+                    key, val = pair.split(":", 1)
+                    headers[key.strip()] = val.strip()
+
+            server_config = MCPServerConfig(
+                type=server_type,
+                url=url,
+                headers=headers,
+                enabled=True,
+            )
+
+        loader.set_server(name, server_config)
+        console.print(f"\n[green]Custom MCP server '{name}' configured![/green]")
+
+    elif server_name in MCP_SERVER_TEMPLATES:
+        template = MCP_SERVER_TEMPLATES[server_name]
+        console.print(f"[bold]Configuring {template['display_name']} MCP Server[/bold]")
+        console.print(f"[dim]{template['description']}[/dim]\n")
+
+        # Check for required environment variables
+        missing_vars = []
+        env_config = {}
+
+        for var in template["env_vars"]:
+            import os
+            if os.environ.get(var):
+                env_config[var] = f"${{{var}}}"  # Use env var reference
+                console.print(f"[green]Found {var}[/green] in environment")
+            else:
+                missing_vars.append(var)
+
+        if missing_vars:
+            console.print(f"\n[yellow]Missing environment variables:[/yellow] {', '.join(missing_vars)}")
+            console.print("Set these before running devassist brief:\n")
+            for var in missing_vars:
+                console.print(f"  export {var}='your-value-here'")
+
+            # Ask if they want to set values now
+            set_now = Prompt.ask("\nSet values now?", choices=["y", "n"], default="n")
+            if set_now.lower() == "y":
+                for var in missing_vars:
+                    value = Prompt.ask(f"  {var}", password=True)
+                    env_config[var] = value
+            else:
+                # Use env var references
+                for var in missing_vars:
+                    env_config[var] = f"${{{var}}}"
+
+        # Create server config
+        server_config = MCPServerConfig(
+            type=template["type"],
+            command=template["command"],
+            args=template["args"],
+            env=env_config,
+            enabled=True,
+        )
+
+        loader.set_server(server_name, server_config)
+        console.print(f"\n[green]{template['display_name']} MCP server configured![/green]")
+        console.print(f"Run [bold]devassist config mcp list[/bold] to see all servers.\n")
+
+    else:
+        available = ", ".join(MCP_SERVER_TEMPLATES.keys())
+        console.print(f"[red]Error:[/red] Unknown server '{server}'")
+        console.print(f"Available: {available}, custom")
+        raise typer.Exit(1)
+
+
+@mcp_app.command("list")
+def mcp_list() -> None:
+    """List all configured MCP servers."""
+    loader = MCPConfigLoader()
+    servers = loader.list_servers()
+
+    if not servers:
+        console.print("\n[dim]No MCP servers configured yet.[/dim]")
+        console.print("Run [bold]devassist config mcp add <server>[/bold] to get started.\n")
+
+        console.print("Available MCP servers:")
+        for name, template in MCP_SERVER_TEMPLATES.items():
+            console.print(f"  - {template['display_name']} ({name}) - {template['description']}")
+        console.print("  - custom - Configure a custom MCP server")
+        console.print()
+        return
+
+    table = Table(title="Configured MCP Servers")
+    table.add_column("Name", style="cyan")
+    table.add_column("Type", style="magenta")
+    table.add_column("Command/URL", style="white")
+    table.add_column("Status", style="green")
+
+    for name in servers:
+        config = loader.get_server(name)
+        if not config:
+            continue
+
+        status = "[green]Enabled[/green]" if config.enabled else "[dim]Disabled[/dim]"
+
+        if config.type == "stdio":
+            location = f"{config.command} {' '.join(config.args[:2])}..."
+        else:
+            location = config.url or "-"
+
+        table.add_row(name, config.type, location[:40], status)
+
+    console.print()
+    console.print(table)
+    console.print()
+
+
+@mcp_app.command("remove")
+def mcp_remove(
+    server: str = typer.Argument(
+        ...,
+        help="MCP server to remove",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Remove without confirmation",
+    ),
+) -> None:
+    """Remove an MCP server configuration."""
+    loader = MCPConfigLoader()
+
+    if server.lower() not in loader.list_servers():
+        console.print(f"[red]Error:[/red] MCP server '{server}' is not configured.")
+        raise typer.Exit(1)
+
+    if not force:
+        confirm = Prompt.ask(
+            f"Remove MCP server '{server}'?",
+            choices=["y", "n"],
+            default="n",
+        )
+        if confirm.lower() != "y":
+            console.print("Cancelled.")
+            raise typer.Exit(0)
+
+    loader.remove_server(server.lower())
+    console.print(f"[green]Removed MCP server '{server}'.[/green]")
+
+
+@mcp_app.command("test")
+def mcp_test(
+    server: Optional[str] = typer.Argument(
+        None,
+        help="MCP server to test. Tests all if not specified.",
+    ),
+) -> None:
+    """Test MCP server configurations.
+
+    Note: This currently only validates configuration, not actual connectivity.
+    """
+    import os
+
+    loader = MCPConfigLoader()
+    servers_to_test = []
+
+    if server:
+        if server.lower() not in loader.list_servers():
+            console.print(f"[red]Error:[/red] MCP server '{server}' is not configured.")
+            raise typer.Exit(1)
+        servers_to_test = [server.lower()]
+    else:
+        servers_to_test = loader.list_servers()
+
+    if not servers_to_test:
+        console.print("\n[dim]No MCP servers configured to test.[/dim]\n")
+        raise typer.Exit(0)
+
+    console.print("\n[bold]Testing MCP server configurations...[/bold]\n")
+
+    results: list[tuple[str, bool, str]] = []
+
+    for name in servers_to_test:
+        config = loader.get_server(name)
+        if not config:
+            results.append((name, False, "Configuration not found"))
+            continue
+
+        # Check if required env vars are set
+        missing_vars = []
+        for key, value in config.env.items():
+            if value.startswith("${") and value.endswith("}"):
+                var_name = value[2:-1]
+                if not os.environ.get(var_name):
+                    missing_vars.append(var_name)
+
+        if missing_vars:
+            results.append((name, False, f"Missing env vars: {', '.join(missing_vars)}"))
+        elif config.type == "stdio" and not config.command:
+            results.append((name, False, "No command specified"))
+        elif config.type in ("http", "sse") and not config.url:
+            results.append((name, False, "No URL specified"))
+        else:
+            results.append((name, True, "Configuration valid"))
+
+    # Display results
+    table = Table(title="MCP Configuration Test Results")
+    table.add_column("Server", style="cyan")
+    table.add_column("Status")
+    table.add_column("Message")
+
+    for name, success, message in results:
+        status = "[green]OK[/green]" if success else "[red]FAIL[/red]"
+        table.add_row(name, status, message)
+
+    console.print(table)
+    console.print()
+
+    if any(not success for _, success, _ in results):
+        raise typer.Exit(1)
+
+
+# User profile subcommand group
+user_app = typer.Typer(
+    name="user",
+    help="Manage user profile settings for personalized briefs.",
+    no_args_is_help=True,
+)
+app.add_typer(user_app, name="user")
+
+
+@user_app.command("set")
+def user_set(
+    github_username: Optional[str] = typer.Option(
+        None, "--github", "-g", help="Your GitHub username"
+    ),
+    github_orgs: Optional[str] = typer.Option(
+        None, "--orgs", "-o", help="GitHub organizations (comma-separated)"
+    ),
+    email: Optional[str] = typer.Option(
+        None, "--email", "-e", help="Your email address"
+    ),
+    name: Optional[str] = typer.Option(
+        None, "--name", "-n", help="Your display name"
+    ),
+    jira_username: Optional[str] = typer.Option(
+        None, "--jira", help="Your JIRA username"
+    ),
+) -> None:
+    """Set user profile information for personalized briefs.
+
+    Example:
+        devassist config user set --github myusername --orgs "myorg,company"
+    """
+    manager = ConfigManager()
+    config = manager.load_config()
+
+    updated = False
+
+    if github_username is not None:
+        config.user.github_username = github_username
+        console.print(f"[green]Set GitHub username:[/green] {github_username}")
+        updated = True
+
+    if github_orgs is not None:
+        orgs = [o.strip() for o in github_orgs.split(",") if o.strip()]
+        config.user.github_orgs = orgs
+        console.print(f"[green]Set GitHub orgs:[/green] {', '.join(orgs)}")
+        updated = True
+
+    if email is not None:
+        config.user.email = email
+        console.print(f"[green]Set email:[/green] {email}")
+        updated = True
+
+    if name is not None:
+        config.user.name = name
+        console.print(f"[green]Set name:[/green] {name}")
+        updated = True
+
+    if jira_username is not None:
+        config.user.jira_username = jira_username
+        console.print(f"[green]Set JIRA username:[/green] {jira_username}")
+        updated = True
+
+    if updated:
+        manager.save_config(config)
+        console.print("\n[dim]User profile saved.[/dim]")
+    else:
+        console.print("[yellow]No options provided. Use --help to see available options.[/yellow]")
+
+
+@user_app.command("show")
+def user_show() -> None:
+    """Show current user profile settings."""
+    manager = ConfigManager()
+    config = manager.load_config()
+    user = config.user
+
+    console.print("\n[bold]User Profile[/bold]\n")
+
+    table = Table(show_header=False)
+    table.add_column("Setting", style="cyan")
+    table.add_column("Value")
+
+    table.add_row("Name", user.name or "[dim]Not set[/dim]")
+    table.add_row("Email", user.email or "[dim]Not set[/dim]")
+    table.add_row("GitHub Username", user.github_username or "[dim]Not set[/dim]")
+    table.add_row("GitHub Orgs", ", ".join(user.github_orgs) if user.github_orgs else "[dim]Not set[/dim]")
+    table.add_row("JIRA Username", user.jira_username or "[dim]Not set[/dim]")
+
+    console.print(table)
+    console.print()
+
+    if not any([user.name, user.email, user.github_username]):
+        console.print("[dim]Tip: Set your GitHub username for personalized briefs:[/dim]")
+        console.print("  devassist config user set --github YOUR_USERNAME\n")

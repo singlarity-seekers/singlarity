@@ -69,29 +69,81 @@ def main(
 @app.command()
 def status() -> None:
     """Show current configuration status."""
+    import os
+
     from devassist.core.config_manager import ConfigManager
+    from devassist.mcp.config import MCPConfigLoader
 
     manager = ConfigManager()
+    config = manager.load_config()
     sources = manager.list_sources()
 
     console.print(f"\n[bold]DevAssist v{__version__}[/bold]\n")
     console.print(f"Workspace: {manager.workspace_dir}")
     console.print(f"Config: {manager.config_path}")
 
-    if sources:
-        console.print(f"\nConfigured sources: {', '.join(sources)}")
+    # AI Provider status
+    provider = config.ai.provider
+    console.print(f"\n[bold]AI Provider:[/bold] {provider}")
+
+    if provider == "claude":
+        api_key_set = bool(os.environ.get("ANTHROPIC_API_KEY"))
+        vertex_project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("CLOUDSDK_CORE_PROJECT")
+
+        # Try gcloud config as fallback
+        if not vertex_project:
+            from devassist.core.orchestrator import _get_gcloud_project
+
+            vertex_project = _get_gcloud_project()
+
+        if api_key_set:
+            console.print("  Auth: [green]Anthropic API Key[/green]")
+        elif vertex_project:
+            console.print(f"  Auth: [green]Vertex AI[/green] (project: {vertex_project})")
+        else:
+            console.print("  Auth: [yellow]Not configured[/yellow]")
+            console.print("  Set ANTHROPIC_API_KEY or configure gcloud project")
     else:
-        console.print("\n[dim]No sources configured yet.[/dim]")
-        console.print("Run [bold]devassist config add <source>[/bold] to get started.\n")
+        console.print(f"  Model: {config.ai.model}")
+
+    # MCP Servers
+    mcp_loader = MCPConfigLoader()
+    mcp_config = mcp_loader.load()
+    mcp_servers = list(mcp_config.mcp_servers.keys())
+
+    if mcp_servers:
+        console.print(f"\n[bold]MCP Servers:[/bold] {', '.join(mcp_servers)}")
+    else:
+        console.print("\n[dim]No MCP servers configured.[/dim]")
+        console.print("Run [bold]devassist config mcp add <server>[/bold] to configure.")
+
+    # Legacy adapters
+    if sources:
+        console.print(f"\n[bold]Legacy Adapters:[/bold] {', '.join(sources)}")
+    else:
+        console.print("\n[dim]No legacy adapters configured.[/dim]")
+
+    # Daemon status
+    from devassist.cli.daemon import get_daemon_pid
+
+    daemon_pid = get_daemon_pid()
+    if daemon_pid:
+        console.print(f"\n[bold]Daemon:[/bold] [green]Running[/green] (PID {daemon_pid})")
+    else:
+        console.print(f"\n[bold]Daemon:[/bold] [dim]Not running[/dim]")
+
+    console.print()
 
 
 # Import and register sub-commands
 from devassist.cli.brief import app as brief_app
 from devassist.cli.config import app as config_app
+from devassist.cli.daemon import app as daemon_app
 
 # Register subcommands
 app.add_typer(config_app, name="config")
 app.add_typer(brief_app, name="brief")
+app.add_typer(daemon_app, name="daemon")
 
 
 if __name__ == "__main__":

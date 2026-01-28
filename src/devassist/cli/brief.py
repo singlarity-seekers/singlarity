@@ -5,6 +5,7 @@ Provides commands to generate and view the Unified Morning Brief.
 
 import asyncio
 import json
+from datetime import datetime
 from typing import Optional
 
 import typer
@@ -13,7 +14,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 
-from devassist.core.brief_generator import BriefGenerator
+from devassist.core.config_manager import ConfigManager
 from devassist.models.brief import Brief
 from devassist.models.context import SourceType
 
@@ -146,6 +147,28 @@ def display_brief_json(brief: Brief) -> None:
     console.print_json(json.dumps(output, indent=2))
 
 
+def display_markdown_brief(markdown_text: str) -> None:
+    """Display a markdown brief from Claude orchestrator.
+
+    Args:
+        markdown_text: Markdown-formatted brief.
+    """
+    # Header
+    console.print()
+    console.print(
+        Panel(
+            f"[bold]Unified Morning Brief[/bold]\n"
+            f"[dim]Generated at {datetime.now().strftime('%Y-%m-%d %H:%M')}[/dim]",
+            border_style="blue",
+        )
+    )
+
+    # Render markdown
+    console.print()
+    console.print(Markdown(markdown_text))
+    console.print()
+
+
 @app.callback(invoke_without_command=True)
 def generate_brief(
     ctx: typer.Context,
@@ -167,32 +190,64 @@ def generate_brief(
         "-j",
         help="Output as JSON for machine processing.",
     ),
+    provider: Optional[str] = typer.Option(
+        None,
+        "--provider",
+        "-p",
+        help="AI provider to use ('claude' or 'vertex'). Default: from config.",
+    ),
 ) -> None:
     """Generate your Unified Morning Brief.
 
     Fetches context from configured sources, ranks by relevance,
     and generates an AI-powered summary of what you need to know today.
+
+    When using Claude provider (default), Claude uses MCP tools to fetch
+    context directly. When using Vertex provider, uses traditional adapters.
     """
     if ctx.invoked_subcommand is not None:
         return
 
-    # Parse sources
+    # Get provider from config if not specified
+    config_manager = ConfigManager()
+    config = config_manager.load_config()
+    ai_provider = provider or config.ai.provider
+
+    # Parse sources (only used for vertex provider)
     source_filter = parse_sources(sources)
 
     # Show progress
     if not json_output:
-        console.print("[dim]Generating your morning brief...[/dim]")
+        console.print(f"[dim]Generating your morning brief (using {ai_provider})...[/dim]")
 
     try:
-        # Generate brief
-        generator = BriefGenerator()
-        brief = asyncio.run(generator.generate(sources=source_filter, refresh=refresh))
+        if ai_provider == "claude":
+            # Use Claude orchestrator with MCP tools
+            from devassist.core.orchestrator import ClaudeOrchestrator
 
-        # Display result
-        if json_output:
-            display_brief_json(brief)
+            orchestrator = ClaudeOrchestrator()
+            markdown_brief = asyncio.run(orchestrator.generate_brief(refresh=refresh))
+
+            if json_output:
+                output = {
+                    "summary": markdown_brief,
+                    "generated_at": datetime.now().isoformat(),
+                    "provider": "claude",
+                }
+                console.print_json(json.dumps(output, indent=2))
+            else:
+                display_markdown_brief(markdown_brief)
         else:
-            display_brief(brief)
+            # Use traditional BriefGenerator with Vertex AI
+            from devassist.core.brief_generator import BriefGenerator
+
+            generator = BriefGenerator()
+            brief = asyncio.run(generator.generate(sources=source_filter, refresh=refresh))
+
+            if json_output:
+                display_brief_json(brief)
+            else:
+                display_brief(brief)
 
     except Exception as e:
         if json_output:
