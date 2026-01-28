@@ -246,8 +246,9 @@ gcloud config set project YOUR_PROJECT_ID
 ```
 or via API key:
 ```bash
-export DEVASSIST_AI__API_KEY=your-api-key
+export DEVASSIST_AI__API_KEY=your-api-key #vertex key
 ```
+
 
 ## Specification-First Workflow
 
