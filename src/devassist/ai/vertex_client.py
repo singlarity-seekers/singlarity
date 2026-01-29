@@ -4,8 +4,10 @@ Handles AI summarization using Google Cloud Vertex AI (Gemini).
 """
 
 import asyncio
+import json
 from typing import Any
 
+from devassist.ai.base_client import BaseAIClient
 from devassist.ai.prompts import NO_ITEMS_SUMMARY, build_summarization_prompt, get_system_prompt
 from devassist.models.context import ContextItem
 
@@ -21,7 +23,7 @@ except ImportError:
     types = None  # type: ignore
 
 
-class VertexAIClient:
+class VertexAIClient(BaseAIClient):
     """Client for Vertex AI Gemini model interactions."""
 
     DEFAULT_MODEL = "gemini-1.5-flash"
@@ -123,11 +125,16 @@ class VertexAIClient:
             raise last_error
         raise RuntimeError("Summarization failed with unknown error")
 
-    async def _generate_content(self, prompt: str) -> str:
+    async def _generate_content(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+    ) -> str:
         """Generate content using the AI model.
 
         Args:
             prompt: The prompt to send.
+            system_prompt: Optional custom system prompt. If None, uses default.
 
         Returns:
             Generated content string.
@@ -137,6 +144,7 @@ class VertexAIClient:
             return "AI summarization unavailable. Please configure Vertex AI."
 
         client = self._get_client()
+        effective_system_prompt = system_prompt if system_prompt is not None else get_system_prompt()
 
         # Run in thread pool since google-genai may be sync
         loop = asyncio.get_event_loop()
@@ -146,7 +154,7 @@ class VertexAIClient:
                 model=self.model,
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    system_instruction=get_system_prompt(),
+                    system_instruction=effective_system_prompt,
                     temperature=0.3,  # Lower for more consistent outputs
                     max_output_tokens=1024,
                 ),
@@ -154,6 +162,56 @@ class VertexAIClient:
         )
 
         return response.text
+
+    async def execute_prompt(
+        self,
+        prompt: str,
+        context: dict[str, Any],
+        system_prompt: str | None = None,
+    ) -> str:
+        """Execute a custom prompt with provided context.
+
+        Args:
+            prompt: The user's custom prompt/instruction.
+            context: Dictionary of context data.
+            system_prompt: Optional custom system prompt. If None, uses default.
+
+        Returns:
+            AI-generated response string.
+
+        Raises:
+            Exception: If execution fails after retries.
+        """
+        # Build full prompt with context
+        context_json = json.dumps(context, indent=2, default=str)
+        full_prompt = f"{prompt}\n\nContext:\n{context_json}"
+
+        # Retry loop
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries):
+            try:
+                return await self._generate_content(full_prompt, system_prompt=system_prompt)
+            except Exception as e:
+                last_error = e
+                if attempt < self.max_retries - 1:
+                    await asyncio.sleep(2**attempt)
+
+        if last_error:
+            raise last_error
+        raise RuntimeError("Execution failed with unknown error")
+
+    async def test_connection(self) -> bool:
+        """Test connection to Vertex AI.
+
+        Returns:
+            True if connection is successful, False otherwise.
+        """
+        try:
+            # Simple test prompt
+            await self._generate_content("Respond with 'OK' if you can read this.")
+            return True
+        except Exception:
+            return False
 
     def _build_prompt(self, items: list[ContextItem]) -> str:
         """Build the prompt from context items.
@@ -184,33 +242,3 @@ class VertexAIClient:
 
         context_text = "\n\n".join(context_parts)
         return build_summarization_prompt(context_text)
-
-    def _format_item(self, item: ContextItem) -> str:
-        """Format a single context item for the prompt.
-
-        Args:
-            item: Context item to format.
-
-        Returns:
-            Formatted string representation.
-        """
-        parts = [
-            f"[{item.source_type.value.upper()}] {item.title}",
-        ]
-
-        if item.author:
-            parts.append(f"From: {item.author}")
-
-        parts.append(f"Time: {item.timestamp.strftime('%Y-%m-%d %H:%M')}")
-
-        if item.content:
-            # Truncate long content
-            content = item.content[:500]
-            if len(item.content) > 500:
-                content += "..."
-            parts.append(f"Content: {content}")
-
-        if item.url:
-            parts.append(f"Link: {item.url}")
-
-        return "\n".join(parts)

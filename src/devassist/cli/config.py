@@ -263,3 +263,68 @@ def test_source(
     # Exit with error if any tests failed
     if any(not success for _, success, _ in results):
         raise typer.Exit(1)
+
+
+@app.command("migrate")
+def migrate_config() -> None:
+    """Migrate config.yaml to .mcp.json format.
+
+    Converts the legacy config.yaml format to the new .mcp.json format,
+    creating a backup of the original file.
+    """
+    from devassist.models.mcp_config import AIProviderConfig, MCPConfig, VertexConfig
+
+    manager = ConfigManager()
+    legacy_path = manager.workspace_dir / "config.yaml"
+    mcp_path = manager.workspace_dir / ".mcp.json"
+
+    # Check if legacy config exists
+    if not legacy_path.exists():
+        console.print("\n[yellow]No config.yaml found to migrate.[/yellow]")
+        console.print("Already using .mcp.json or no configuration exists.\n")
+        return
+
+    # Check if .mcp.json already exists
+    if mcp_path.exists():
+        console.print("\n[yellow].mcp.json already exists![/yellow]")
+        overwrite = Prompt.ask(
+            "Overwrite existing .mcp.json?",
+            choices=["y", "n"],
+            default="n",
+        )
+        if overwrite.lower() != "y":
+            console.print("Migration cancelled.")
+            raise typer.Exit(0)
+
+    console.print("\n[bold]Migrating config.yaml to .mcp.json...[/bold]\n")
+
+    # Load legacy config
+    legacy_config = manager._load_legacy_config(legacy_path)
+
+    # Transform to MCPConfig
+    mcp_config = MCPConfig(
+        version="1.0",
+        ai=AIProviderConfig(
+            provider="vertex",  # Default to vertex if they had AI configured
+            vertex=VertexConfig(
+                api_key=legacy_config.ai.api_key,
+                project_id=legacy_config.ai.project_id,
+                location=legacy_config.ai.location,
+                model=legacy_config.ai.model,
+            ),
+        ),
+        sources=legacy_config.sources,
+    )
+
+    # Save new config
+    manager.save_config(mcp_config)
+
+    # Backup legacy config
+    backup_path = manager.workspace_dir / "config.yaml.bak"
+    import shutil
+    shutil.copy(legacy_path, backup_path)
+
+    console.print(f"[green]Migration successful![/green]")
+    console.print(f"- New config: {mcp_path}")
+    console.print(f"- Backup: {backup_path}")
+    console.print("\n[dim]You can safely delete config.yaml.bak after verifying the migration.[/dim]\n")
