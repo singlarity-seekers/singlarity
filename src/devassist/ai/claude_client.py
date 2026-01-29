@@ -203,14 +203,22 @@ class ClaudeClient:
         logger.debug(f"Resolved MCP config for {len(resolved_config)} servers: {list(resolved_config.keys())}")
         return resolved_config
 
-    def create_session(self) -> ClaudeSession:
+    def create_session(self, sdk_session_id: str | None = None) -> ClaudeSession:
         """Create a new Claude session.
+
+        Args:
+            sdk_session_id: Optional SDK session ID from Claude Agent SDK.
+                           If None, a placeholder ID is used until first API call.
 
         Returns:
             ClaudeSession object with session ID.
         """
-        # Generate session ID
-        session_id = f"session-{uuid.uuid4().hex[:12]}"
+        # Use SDK session ID if provided, otherwise create placeholder
+        # The placeholder will be replaced after the first successful API call
+        if sdk_session_id:
+            session_id = sdk_session_id
+        else:
+            session_id = f"pending-{uuid.uuid4().hex[:12]}"
 
         # Create session object
         session = ClaudeSession(
@@ -260,10 +268,15 @@ class ClaudeClient:
         # Get MCP servers config (may be empty if not configured)
         mcp_servers = self._get_mcp_servers_config()
 
+        # Only resume if we have a valid SDK session ID (not a pending one)
+        resume_id = None
+        if self.session and not self.session.session_id.startswith("pending-"):
+            resume_id = self.session.session_id
+
         options = ClaudeAgentOptions(
             system_prompt=effective_system_prompt,
             permission_mode=self.config.permission_mode,
-            resume=self.session.session_id if self.session else None,
+            resume=resume_id,
             mcp_servers=mcp_servers if mcp_servers else None,
         )
 
@@ -285,9 +298,14 @@ class ClaudeClient:
 
             # Update session with new session ID if provided
             if new_session_id and self.session:
-                if new_session_id != self.session.session_id:
-                    # Session ID changed, update
+                old_session_id = self.session.session_id
+                if new_session_id != old_session_id:
+                    # Remove old session from store if it was a pending session
+                    if old_session_id.startswith("pending-"):
+                        ClaudeClient._session_store.pop(old_session_id, None)
+                    # Update to real SDK session ID
                     self.session.session_id = new_session_id
+                    logger.info(f"Updated session ID: {old_session_id} -> {new_session_id}")
                 self.session.last_used = datetime.now()
                 self.session.turns += 1
                 ClaudeClient._session_store[self.session.session_id] = self.session
