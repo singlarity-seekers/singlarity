@@ -98,26 +98,65 @@ def get_ai_client(config: MCPConfig):
         )
 
 
-def get_claude_client() -> ClaudeClient:
+def get_claude_client(
+    new_session: bool = False,
+    resume_session: bool = False,
+    session_id: str | None = None,
+) -> ClaudeClient:
     """Create a ClaudeClient with session management.
+
+    Args:
+        new_session: If True, always create a new session.
+        resume_session: If True, resume the most recent session.
+        session_id: Specific session ID (or prefix) to resume.
 
     Returns:
         Configured ClaudeClient.
     """
-    return ClaudeClient(
+    client = ClaudeClient(
         system_prompt=get_runner_system_prompt(),
     )
+
+    if new_session:
+        # Clear existing session and create fresh one
+        client.clear_session()
+        client.session = client.create_session()
+    elif session_id:
+        # Find session by ID prefix
+        matching_session = None
+        for sid in ClaudeClient.get_session_ids():
+            if sid.startswith(session_id):
+                matching_session = ClaudeClient.get_session_by_id(sid)
+                break
+        if matching_session:
+            client.session = matching_session
+            client._save_session_to_file(matching_session)
+        else:
+            console.print(f"[yellow]Session '{session_id}' not found. Creating new session.[/yellow]")
+            client.clear_session()
+            client.session = client.create_session()
+    elif resume_session:
+        # Use the most recent session (already loaded by default)
+        pass
+    else:
+        # Default: create new session
+        client.clear_session()
+        client.session = client.create_session()
+
+    return client
 
 
 def run_background_runner() -> None:
     """Entry point for background runner process.
 
     This function is called in a separate process and runs the runner loop.
-    Uses AgentClient for automatic session management.
+    Uses ClaudeClient for automatic session management.
 
     Reads CLI options from environment variables:
     - DEVASSIST_RUNNER_INTERVAL: Interval in minutes
     - DEVASSIST_RUNNER_PROMPT: Custom prompt
+    - DEVASSIST_RUNNER_RESUME: Resume latest session if "1"
+    - DEVASSIST_RUNNER_SESSION_ID: Specific session ID to resume
     """
     import asyncio
     import logging
@@ -149,8 +188,16 @@ def run_background_runner() -> None:
     if prompt := os.environ.get("DEVASSIST_RUNNER_PROMPT"):
         config.runner.prompt = prompt
 
-    # Create AgentClient with session management
-    ai_client = get_claude_client()
+    # Read session options from environment
+    resume = os.environ.get("DEVASSIST_RUNNER_RESUME") == "1"
+    session_id = os.environ.get("DEVASSIST_RUNNER_SESSION_ID")
+
+    # Create ClaudeClient with session management
+    ai_client = get_claude_client(
+        new_session=not (resume or session_id),
+        resume_session=resume,
+        session_id=session_id,
+    )
 
     # Create aggregator
     aggregator = ContextAggregator()
@@ -186,11 +233,26 @@ def run_runner(
         "-f",
         help="Run in foreground instead of background.",
     ),
+    resume: bool = typer.Option(
+        False,
+        "--resume",
+        "-r",
+        help="Resume the most recent session instead of creating a new one.",
+    ),
+    session: Optional[str] = typer.Option(
+        None,
+        "--session",
+        "-s",
+        help="Resume a specific session by ID (first 4-5 characters).",
+    ),
 ) -> None:
     """Start the background AI runner.
 
     The runner executes a custom prompt at regular intervals using context
     from configured sources.
+
+    By default, creates a new session. Use --resume to continue the last session
+    or --session to specify a session ID.
     """
     # Load configuration
     manager = ConfigManager()
@@ -222,15 +284,28 @@ def run_runner(
         console.print("[bold]Starting AI runner in foreground...[/bold]")
         console.print(f"  Interval: {config.runner.interval_minutes} minutes")
         console.print(f"  Prompt: {config.runner.prompt[:50]}...")
-        console.print("  Session: Managed by Agent SDK (auto-resume)")
-        console.print("\nPress Ctrl+C to stop.\n")
 
         import asyncio
 
         from devassist.core.aggregator import ContextAggregator
         from devassist.core.runner import Runner
 
-        ai_client = get_claude_client()
+        # Handle session options
+        ai_client = get_claude_client(
+            new_session=not (resume or session),
+            resume_session=resume,
+            session_id=session,
+        )
+
+        session_info = "New session"
+        if resume:
+            session_info = f"Resuming latest session ({ai_client.session.session_id[:8]}...)"
+        elif session:
+            session_info = f"Resuming session ({ai_client.session.session_id[:8]}...)"
+
+        console.print(f"  Session: {session_info}")
+        console.print("\nPress Ctrl+C to stop.\n")
+
         aggregator = ContextAggregator()
         runner = Runner(
             config=config,
@@ -246,8 +321,19 @@ def run_runner(
     else:
         # Run in background
         try:
-            runner_manager.start(interval=interval, prompt=prompt)
+            runner_manager.start(
+                interval=interval,
+                prompt=prompt,
+                resume=resume,
+                session_id=session,
+            )
             status = runner_manager.get_status()
+
+            session_info = "New session"
+            if resume:
+                session_info = "Resuming latest session"
+            elif session:
+                session_info = f"Resuming session {session}..."
 
             console.print(
                 Panel(
@@ -255,6 +341,7 @@ def run_runner(
                     f"  PID: {status.pid}\n"
                     f"  Interval: {config.runner.interval_minutes} minutes\n"
                     f"  Prompt: {config.runner.prompt[:50]}...\n"
+                    f"  Session: {session_info}\n"
                     f"  Output: {config.runner.output_destination}\n"
                     f"  Logs: {runner_manager.get_log_path()}",
                     title="Runner Started",

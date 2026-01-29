@@ -98,12 +98,16 @@ class RunnerManager:
         self,
         interval: int | None = None,
         prompt: str | None = None,
+        resume: bool = False,
+        session_id: str | None = None,
     ) -> None:
         """Start the background runner process.
 
         Args:
             interval: Interval in minutes between executions.
             prompt: Custom prompt to execute.
+            resume: Resume the most recent session.
+            session_id: Specific session ID (or prefix) to resume.
 
         Raises:
             RuntimeError: If runner is already running or cannot acquire lock.
@@ -129,6 +133,10 @@ class RunnerManager:
                 env["DEVASSIST_RUNNER_INTERVAL"] = str(interval)
             if prompt is not None:
                 env["DEVASSIST_RUNNER_PROMPT"] = prompt
+            if resume:
+                env["DEVASSIST_RUNNER_RESUME"] = "1"
+            if session_id is not None:
+                env["DEVASSIST_RUNNER_SESSION_ID"] = session_id
 
             process = subprocess.Popen(
                 [
