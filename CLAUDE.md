@@ -69,9 +69,12 @@ devassist status
 
 # Configure through config files and environment variables
 # Workspace directory (~/.devassist/) is created automatically
-# Create ~/.devassist/config.yaml with your settings
+# Configure source credentials as needed:
 export JIRA_URL="https://yourcompany.atlassian.net"
 export JIRA_API_TOKEN="your-token"
+export GITHUB_TOKEN="your-github-token"
+
+# Claude AI authentication is handled automatically by the Agent SDK
 
 # Generate morning brief
 devassist brief
@@ -79,11 +82,25 @@ devassist brief --sources gmail,slack     # specific sources
 devassist brief --model "Opus 4"         # user-friendly AI model names
 devassist brief --resume                 # continue previous conversation
 devassist brief --session-id session-123 # use specific session
+devassist brief --refresh  # bypass cache
+devassist brief --json     # JSON output
 
 # Session management
 devassist brief sessions                 # list recent sessions
 devassist brief clean --days 7          # clean old sessions
 devassist brief clear session-123       # clear specific session
+
+# Background AI runner
+devassist ai run                     # Start background runner (default: 5 min interval)
+devassist ai run --interval 10       # Custom interval in minutes
+devassist ai run --prompt "Custom prompt"  # Custom prompt
+devassist ai run --foreground        # Run in foreground (Ctrl+C to stop)
+devassist ai status                  # Show runner status
+devassist ai logs                    # Show last 50 log lines
+devassist ai logs --follow           # Follow logs (like tail -f)
+devassist ai logs --lines 100        # Show last 100 lines
+devassist ai kill                    # Stop runner gracefully
+devassist ai kill --force            # Force kill
 ```
 
 ## Architecture
@@ -92,25 +109,38 @@ devassist brief clear session-123       # clear specific session
 
 ```
 src/devassist/
-├── ai/          # Claude Agent SDK integration
-├── cli/         # Typer CLI commands (presentation layer)
-├── core/        # Business logic (brief_generator)
-├── models/      # Pydantic data models (config_unified, brief, context)
+├── ai/          # Claude Agent SDK integration and AI clients (claude_client, vertex_client, base_client)
+├── cli/         # Typer CLI commands (main, config, brief, ai) - presentation layer
+├── core/        # Business logic (aggregator, ranker, brief_generator, runner)
+├── adapters/    # Context source adapters (gmail, slack, jira, github)
+├── models/      # Pydantic data models (config_unified, brief, context, mcp_config)
 ├── resources/   # System prompts, MCP server configurations
-└── utils/       # Utility functions
+├── preferences/ # Preference learning system
+└── utils/       # Utilities (process management, logging)
 ```
 
 ### Key Architectural Principles
 
 The architecture follows modern patterns for maintainability and extensibility:
 
-1. **Unified Configuration**: Single `AppConfig` class handles all configuration needs
+1. **Unified Configuration**: Single `ClientConfig` class handles all configuration needs
 2. **Self-Contained Components**: Each component manages its own state and dependencies
 3. **Static Session Management**: Sessions persist across component instances
 4. **MCP Integration**: Uses industry-standard Model Context Protocol servers
+5. **CLI Layer** (`cli/`): Typer commands, Rich output formatting, user interaction
+6. **Core Services** (`core/`):
+   - `aggregator.py` - Fetches context from all sources (SRP: fetch only)
+   - `ranker.py` - Scores and sorts items by relevance (SRP: ranking only)
+   - `brief_generator.py` - Orchestrates the full brief generation flow (SRP: coordination)
+   - `cache_manager.py` - 15-minute TTL caching
+   - `runner.py` - Background runner with asyncio event loop
+   - `runner_manager.py` - Process lifecycle management (PID files, signals)
+7. **Adapters** (`adapters/`): All implement `ContextSourceAdapter` contract (OCP: extend without modifying)
+8. **AI Layer** (`ai/`): AI client implementations (Claude SDK, Vertex AI) and prompt templates
+
 ### Core Components
 
-1. **AppConfig** (`models/config_unified.py`): Unified configuration with smart deserialization
+1. **ClientConfig** (`models/config.py`): Unified configuration with smart deserialization
 2. **ClaudeClient** (`ai/claude_client.py`): Claude Agent SDK wrapper with static session management
 3. **BriefGenerator** (`core/brief_generator.py`): Orchestrates brief generation workflow
 
@@ -145,10 +175,56 @@ Rich Console → formatted terminal output
 
 ### Configuration Precedence
 
-The system uses three-tier configuration:
+The system uses a multi-tier configuration:
 1. CLI flags (highest priority)
 2. Environment variables
-3. Config files: `~/.devassist/config.yaml` (lowest priority)
+3. `.mcp.json` in current working directory
+4. `~/.devassist/.mcp.json`
+5. `~/.devassist/config.yaml` (legacy, deprecated)
+
+### .mcp.json Configuration
+
+The `.mcp.json` file is the primary configuration format supporting MCP servers, AI providers, and the background runner:
+
+```json
+{
+  "version": "1.0",
+  "mcp_servers": {
+    "devassist": {
+      "command": "devassist",
+      "args": ["--config", "${workspace}/.mcp.json"],
+      "env": {}
+    }
+  },
+  "ai": {
+    "provider": "claude",
+    "model": "claude-sonnet-4-5@20250929",
+    "max_tokens": 4096,
+    "temperature": 0.7
+  },
+  "runner": {
+    "enabled": false,
+    "interval_minutes": 5,
+    "prompt": "Review my context and summarize urgent items.",
+    "output_destination": "~/.devassist/runner-output.md",
+    "notify_on_completion": false,
+    "sources": []
+  },
+  "sources": {
+    "gmail": { "enabled": true },
+    "slack": { "bot_token": "${SLACK_BOT_TOKEN}" }
+  },
+  "preferences": {
+    "priority_keywords": ["urgent", "critical"]
+  }
+}
+```
+
+**Environment Variable Expansion**: Use `${VAR_NAME}` syntax to reference environment variables for source configuration (like `${SLACK_BOT_TOKEN}`). Undefined variables expand to empty string.
+
+**Authentication**: Claude Agent SDK handles AI authentication automatically - no manual API key configuration required.
+
+**Migration**: Run `devassist config migrate` to convert `config.yaml` to `.mcp.json` format.
 
 ### Storage Model
 
@@ -157,7 +233,19 @@ All data is stored locally in `~/.devassist/`:
 ```
 ~/.devassist/
 ├── config.yaml          # User configuration (YAML format)
-└── briefs/              # Historical briefs (planned)
+├── .mcp.json            # Primary MCP configuration (servers, AI, runner)
+├── runner.pid           # Background runner PID file
+├── runner.lock          # Runner lock file (single-instance enforcement)
+├── runner-output.md     # Runner output destination
+├── logs/
+│   └── runner.log       # Background runner logs
+├── cache/               # Source-specific caches (15-min TTL)
+│   ├── gmail/
+│   ├── slack/
+│   ├── jira/
+│   └── github/
+├── briefs/              # Historical briefs
+└── preferences.json     # Learned user preferences (planned)
 ```
 
 **Key Changes from Legacy:**
@@ -254,6 +342,28 @@ Key async operations:
 - `ClaudeClient.make_call()` - AI interactions
 - `ClaudeClient.create_session()` - Session initialization
 - `BriefGenerator.generate()` - Brief orchestration
+
+### AI Integration
+
+The project uses **Claude Agent SDK** for AI operations:
+
+**Features:**
+- Background prompt execution via background runner
+- Context summarization through morning briefs
+- Custom task automation
+- Session-based conversations
+- MCP server integration for context aggregation
+
+**Authentication:** The Claude Agent SDK handles authentication automatically - no manual API key setup required.
+
+Configure provider in `.mcp.json`:
+```json
+{
+  "ai": {
+    "provider": "claude",  // or "vertex"
+    ...
+  }
+}
 ```
 
 ## Specification-First Workflow
@@ -286,7 +396,7 @@ When implementing features:
 
 **Current Architecture: Unified & Modernized**
 
-- ✅ **Phase 1**: Unified AppConfig with smart deserialization
+- ✅ **Phase 1**: Unified ClientConfig with smart deserialization
 - ✅ **Phase 2**: Self-contained ClaudeClient with static session management
 - ✅ **Phase 3**: Deprecated manager classes removed
 - ✅ **Core Infrastructure**: Claude Agent SDK integration
@@ -295,6 +405,9 @@ When implementing features:
 - ✅ **Session Management**: Persistent conversations across CLI calls
 - ✅ **MCP Integration**: Industry-standard context server protocol
 - ✅ **Testing**: 45+ comprehensive tests covering new architecture
+- ✅ **Background AI Runner**: Claude SDK integration with background processing
+- ✅ **MCP Configuration**: .mcp.json format with environment variable expansion
+- 🚧 **Context Source Adapters**: Gmail, Slack, JIRA, GitHub implementations
 - ⏳ **MCP Server Deployment**: Actual server implementations (planned)
 - ⏳ **Preference Learning**: User priority learning (planned)
 - ⏳ **Advanced Features**: EC2 management, auto-responses (planned)
@@ -310,15 +423,25 @@ When implementing features:
 - User-friendly AI model configuration
 - Environment variable and file-based configuration
 
+### ✅ **Additional Features Implemented**
+- `devassist config add/list/remove/test` - Manage context sources (interactive setup)
+- `devassist config migrate` - Migrate config.yaml to .mcp.json format
+- `devassist ai run` - Start background AI runner process
+- `devassist ai kill` - Stop background runner
+- `devassist ai status` - Show runner status
+- `devassist ai logs` - View runner logs
+
 ### 🚧 **Partially Implemented**
 - MCP server configurations (defined but servers need deployment)
 - Legacy config commands (show deprecation notices)
+- Context source adapter implementations (Gmail, Slack, JIRA, GitHub)
 
 ### ⏳ **Planned Features**
 - Live MCP server deployments
 - Preference learning system
+- `devassist prefs` - Preference management
+- `devassist sandbox` - EC2 instance management
 - Quarterly contribution summaries
-- EC2 sandbox management
 - Auto-response drafting
 
 **Architecture is complete and ready for MCP server integration!**

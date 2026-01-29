@@ -291,12 +291,11 @@ async def main():
         # Show configuration for debugging
         try:
             config = ClientConfig()
-            mcp_config = config.get_mcp_servers_config()
-            print(f"\n🔧 MCP Configuration Debug:")
-            for name, conf in mcp_config.items():
-                print(f"   • {name}: {conf.get('description', 'No description')}")
+            print(f"\n🔧 Configuration Debug:")
+            print(f"   • Enabled sources: {[s.value for s in config.enabled_sources]}")
+            print(f"   • AI model: {config.ai_model}")
         except Exception as config_e:
-            print(f"   Failed to load MCP config: {config_e}")
+            print(f"   Failed to load config: {config_e}")
 
         raise
 

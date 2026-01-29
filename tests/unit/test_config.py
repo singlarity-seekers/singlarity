@@ -194,96 +194,34 @@ class TestClientConfigComputedFields:
             assert config.resolved_system_prompt == "Fallback"
 
 
-class TestClientConfigMCPIntegration:
-    """Tests for MCP server configuration."""
-
-    def test_get_mcp_servers_config_basic(self):
-        """Should build MCP config for enabled sources."""
-        mock_mcp_config = {
-            "gmail": {
-                "command": "mcp-server-gmail",
-                "env": {"GMAIL_TOKEN": "${GMAIL_API_TOKEN}"}
-            },
-            "jira": {
-                "command": "mcp-server-jira",
-                "env": {"JIRA_URL": "${JIRA_URL}"}
-            }
-        }
-
-        with patch('devassist.resources.get_mcp_servers_config', return_value=mock_mcp_config):
-            config = ClientConfig(
-                sources=[SourceType.GMAIL],
-                source_configs={
-                    "gmail": {"enabled": True, "api_token": "test_token"}
-                }
-            )
-
-            mcp_config = config.get_mcp_servers_config()
-            assert "gmail" in mcp_config
-            assert "jira" not in mcp_config
-
-    def test_get_mcp_servers_config_env_var_substitution(self):
-        """Should substitute environment variables in MCP config."""
-        mock_mcp_config = {
-            "jira": {
-                "command": "docker",
-                "env": {
-                    "JIRA_URL": "${JIRA_URL}",
-                    "JIRA_USERNAME": "${JIRA_USERNAME}"
-                }
-            }
-        }
-
-        with patch('devassist.resources.get_mcp_servers_config', return_value=mock_mcp_config):
-            config = ClientConfig(
-                sources=[SourceType.JIRA],
-                source_configs={
-                    "jira": {
-                        "url": "https://test.atlassian.net",
-                        "username": "testuser"
-                    }
-                }
-            )
-
-            mcp_config = config.get_mcp_servers_config()
-            env_vars = mcp_config["jira"]["env"]
-            assert env_vars["JIRA_URL"] == "https://test.atlassian.net"
-            assert env_vars["JIRA_USERNAME"] == "testuser"
-
-    def test_get_mcp_servers_config_with_env_vars(self):
-        """Should prioritize actual environment variables."""
-        mock_mcp_config = {
-            "github": {
-                "command": "mcp-server-github",
-                "env": {"GITHUB_TOKEN": "${GITHUB_TOKEN}"}
-            }
-        }
-
-        with patch('devassist.resources.get_mcp_servers_config', return_value=mock_mcp_config):
-            with patch.dict(os.environ, {"GITHUB_TOKEN": "env_token"}):
-                config = ClientConfig(
-                    sources=[SourceType.GITHUB],
-                    source_configs={
-                        "github": {"token": "config_token"}
-                    }
-                )
-
-                mcp_config = config.get_mcp_servers_config()
-                assert mcp_config["github"]["env"]["GITHUB_TOKEN"] == "env_token"
+class TestClientConfigSourcesHandling:
+    """Tests for available source handling."""
 
     def test_get_available_sources(self):
-        """Should discover available sources from MCP config."""
-        mock_mcp_config = {
-            "gmail": {"command": "test"},
-            "slack": {"command": "test"},
-            "unknown_source": {"command": "test"}  # Should be ignored
-        }
+        """Should return sources based on available MCP servers."""
+        # Test with actual MCP config (which should have jira and github)
+        sources = ClientConfig.get_available_sources()
 
-        with patch('devassist.models.config.get_mcp_servers_config', return_value=mock_mcp_config):
+        # Should include sources from MCP config
+        assert SourceType.JIRA in sources
+        assert SourceType.GITHUB in sources
+
+        # Should be based on actual MCP servers, not all source types
+        assert len(sources) > 0
+
+    def test_get_available_sources_fallback(self):
+        """Should fallback to all sources if MCP config fails."""
+        from unittest.mock import patch
+
+        # Mock get_mcp_servers_config to raise an exception
+        with patch('devassist.resources.get_mcp_servers_config', side_effect=Exception("Config error")):
             sources = ClientConfig.get_available_sources()
+            # Should fallback to all source types
+            assert len(sources) == len(SourceType)
             assert SourceType.GMAIL in sources
             assert SourceType.SLACK in sources
-            assert len(sources) == 2  # unknown_source ignored
+            assert SourceType.JIRA in sources
+            assert SourceType.GITHUB in sources
 
 
 class TestClientConfigCLIIntegration:

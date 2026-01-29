@@ -82,10 +82,12 @@ def display_brief_json(response: str, session_id: str | None = None) -> None:
         response: Claude's response.
         session_id: Session ID if available.
     """
+    from datetime import datetime
+
     output = {
         "response": response,
         "session_id": session_id,
-        "generated_at": asyncio.get_event_loop().time(),
+        "generated_at": datetime.now().isoformat(),
     }
 
     console.print_json(json.dumps(output, indent=2))

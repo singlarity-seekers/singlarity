@@ -9,8 +9,9 @@ DevAssist connects to your daily tools (Gmail, Slack, JIRA, GitHub) through **Mo
 ## ✨ Key Features
 
 - **🔮 AI-Powered Briefs**: Claude Agent SDK generates intelligent summaries
+- **🤖 Background AI Runner**: Automated periodic brief generation
 - **🔌 MCP Integration**: Industry-standard context servers (no custom adapters needed)
-- **⚙️ Unified Configuration**: Single `AppConfig` handles all settings
+- **⚙️ Unified Configuration**: Single `ClientConfig` handles all settings
 - **💾 Smart Sessions**: Persistent conversations that survive across CLI calls
 - **🎯 User-Friendly**: Natural language configuration ("Sonnet 4", "fast", "best")
 - **🏗️ Self-Contained**: Minimal dependencies, maximum reliability
@@ -18,12 +19,15 @@ DevAssist connects to your daily tools (Gmail, Slack, JIRA, GitHub) through **Mo
 ## 🎯 Current Status
 
 **✅ Implemented:**
-- Unified AppConfig with smart deserialization
-- ClaudeClient with static session management
+- Unified ClientConfig with smart deserialization
+- ClaudeClient with Claude Agent SDK integration and static session management
 - BriefGenerator with MCP server integration
 - CLI commands for brief generation and session management
+- Background AI runner with process management
+- AI commands for runner control and monitoring
 
 **🚧 Planned:**
+- Live MCP server deployments
 - Preference learning system
 - Auto-response drafting
 - Quarterly contribution summaries
@@ -61,27 +65,30 @@ Create `~/.devassist/config.yaml`:
 
 ```yaml
 # User-friendly configuration
-ai_model: "Sonnet 4"           # Maps to claude-sonnet-4@20250514
-sources: ["gmail", "slack"]    # Auto-discovered from MCP servers
+ai_model: "Sonnet 4"           # Maps to claude-sonnet-4-5@20250929
+sources: ["jira", "github"]    # Based on available MCP servers
 output_format: "markdown"
 
 # Source-specific settings
 source_configs:
-  gmail:
+  jira:
     enabled: true
-    credentials_file: "/path/to/gmail.json"
-  slack:
+    url: "https://yourcompany.atlassian.net"
+    username: "your-email@company.com"
+  github:
     enabled: true
-    token: "xoxb-your-slack-token"
+    token: "your-github-token"
 ```
 
 ### 3. Set Environment Variables
 ```bash
-# API credentials (recommended for production)
+# Source credentials (recommended for production)
 export JIRA_URL="https://yourcompany.atlassian.net"
-export JIRA_EMAIL="you@company.com"
-export JIRA_API_TOKEN="your-token"
-export GITHUB_PERSONAL_ACCESS_TOKEN="ghp_your_token"
+export JIRA_USERNAME="you@company.com"
+export JIRA_PERSONAL_TOKEN="your-jira-token"
+export GITHUB_TOKEN="your-github-token"
+
+# Claude AI authentication is handled automatically by Agent SDK
 ```
 
 ### 4. Generate Your First Brief
@@ -146,33 +153,64 @@ devassist brief clean --days 7
 devassist brief clear session-abc123
 ```
 
+### Background AI Runner
+```bash
+# Start background runner (runs every 5 minutes by default)
+devassist ai run
+
+# Start with custom interval and prompt
+devassist ai run --interval 10 --prompt "Summarize urgent tasks requiring immediate attention"
+
+# Run in foreground for testing
+devassist ai run --foreground --interval 2
+
+# Check runner status
+devassist ai status
+
+# View runner logs
+devassist ai logs
+
+# View latest runner output
+devassist ai output
+
+# Stop background runner
+devassist ai kill
+```
+
 ## 🏗️ Architecture Overview
 
 ### Modern Design Principles
 - **Self-Contained Components**: Each component manages its own state
-- **Unified Configuration**: Single AppConfig class for all settings
+- **Unified Configuration**: Single ClientConfig class for all settings
 - **Static Sessions**: Shared across all component instances
 - **MCP Integration**: Industry-standard context protocol
+- **Background Processing**: Automated AI runner with process management
 
 ### Core Components
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   CLI Commands  │───▶│    AppConfig     │───▶│  BriefGenerator │
-│   (Typer)       │    │  (Unified)       │    │ (Orchestrator)  │
+│   CLI Commands  │───▶│   ClientConfig   │───▶│  BriefGenerator │
+│ (brief, ai)     │    │   (Unified)      │    │ (Orchestrator)  │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
                                                          │
                                                          ▼
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
 │   MCP Servers   │◀───│  ClaudeClient    │◀───│ Static Sessions │
-│ (Gmail,Slack,   │    │ (Agent SDK)      │    │    Store       │
-│  JIRA,GitHub)   │    │                  │    │                │
+│ (JIRA, GitHub)  │    │ (Agent SDK)      │    │    Store        │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
+                                 ▲                       ▲
+                                 │                       │
+                    ┌─────────────────┐    ┌─────────────────┐
+                    │ Background      │    │   Runner        │
+                    │ Runner          │    │   Manager       │
+                    └─────────────────┘    └─────────────────┘
 ```
 
 ### Data Flow
 ```
-User Input → AppConfig → BriefGenerator → ClaudeClient → MCP Servers → Claude API → Formatted Response
+CLI Input → ClientConfig → BriefGenerator → ClaudeClient → MCP Servers → Claude Agent SDK → Response
+Background Runner → ClientConfig → ClaudeClient → MCP Servers → Output File
 ```
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed technical documentation.
@@ -181,7 +219,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed technical documentation.
 
 ### AI Models (User-Friendly Names)
 ```yaml
-ai_model: "Sonnet 4"     # claude-sonnet-4@20250514
+ai_model: "Sonnet 4"     # claude-sonnet-4-5@20250929 (default)
 ai_model: "Opus 4"       # claude-opus-4-1@20250805
 ai_model: "fast"         # claude-sonnet-4-5@20250929
 ai_model: "best"         # claude-opus-4-5@20251101
@@ -189,8 +227,8 @@ ai_model: "best"         # claude-opus-4-5@20251101
 
 ### Sources
 ```yaml
-sources: ["gmail", "slack", "jira", "github"]
-# Auto-discovered from available MCP servers
+sources: ["jira", "github"]
+# Based on available MCP servers in resources/mcp-servers.json
 ```
 
 ### Session Management
@@ -246,41 +284,51 @@ ruff format src/
 ```
 src/devassist/
 ├── ai/                    # Claude Agent SDK integration
-│   └── claude_client.py   # Self-contained Claude client with sessions
+│   ├── claude_client.py   # Self-contained Claude client with sessions
+│   └── prompts.py         # AI prompt templates
 ├── cli/                   # Command-line interface (Typer)
 │   ├── main.py           # Entry point and status command
 │   ├── brief.py          # Brief generation commands
-│   └── config.py         # Legacy config commands (deprecated)
+│   ├── ai.py             # Background runner commands
+│   └── prompt.py         # Prompt management commands
 ├── core/                  # Business logic
-│   └── brief_generator.py # Orchestrates brief generation
+│   ├── brief_generator.py # Orchestrates brief generation
+│   ├── runner.py         # Background AI runner
+│   └── runner_manager.py # Process lifecycle management
 ├── models/                # Data models (Pydantic)
-│   ├── config_unified.py  # Unified configuration model
+│   ├── config.py         # Unified configuration model (ClientConfig)
+│   ├── mcp_config.py     # MCP server configuration models
 │   ├── brief.py          # Brief data structures
 │   └── context.py        # Context types and enums
 ├── resources/             # Static resources
-│   ├── mcp_servers.yaml  # MCP server configurations
-│   └── system_prompts/   # AI prompts
+│   ├── mcp-servers.json  # MCP server configurations
+│   └── personal-assistant.md # System prompt
 └── utils/                 # Utility functions
+    └── process.py        # Process management utilities
 ```
 
 ## 🔐 Security & Credentials
 
 ### Recommended Approach (Production)
 ```bash
-# Use environment variables
-export GMAIL_CREDENTIALS_FILE="/secure/path/gmail.json"
-export SLACK_API_TOKEN="xoxb-secure-token"
-export JIRA_API_TOKEN="secure-jira-token"
+# Use environment variables for source credentials
+export JIRA_URL="https://yourcompany.atlassian.net"
+export JIRA_USERNAME="your-email@company.com"
+export JIRA_PERSONAL_TOKEN="secure-jira-token"
+export GITHUB_TOKEN="secure-github-token"
+# Claude AI authentication is handled automatically by Agent SDK
 ```
 
 ### Development Convenience
 ```yaml
 # ~/.devassist/config.yaml
 source_configs:
-  gmail:
-    credentials_file: "/path/to/gmail.json"
-  slack:
-    token: "xoxb-dev-token"
+  jira:
+    url: "https://yourcompany.atlassian.net"
+    username: "your-email@company.com"
+    token: "dev-jira-token"
+  github:
+    token: "dev-github-token"
 ```
 
 **⚠️ Never commit credentials to version control**
@@ -290,22 +338,25 @@ source_configs:
 If you're upgrading from the old adapter-based architecture:
 
 ### What Changed
-- ❌ `devassist config add gmail` → ✅ Configure via `config.yaml` or env vars
+- ❌ `devassist config add` → ✅ Configure via `config.yaml` or env vars
 - ❌ Custom adapters → ✅ MCP servers (industry standard)
-- ❌ ConfigManager → ✅ Unified AppConfig
+- ❌ ConfigManager → ✅ Unified ClientConfig
 - ❌ SessionManager → ✅ ClaudeClient static sessions
+- ❌ Manual Claude API keys → ✅ Claude Agent SDK automatic authentication
+- ✅ **NEW**: Background AI runner (`devassist ai` commands)
 
 ### Migration Steps
 1. Create `~/.devassist/config.yaml` with your sources
-2. Set environment variables for credentials
-3. Use new CLI commands (old config commands show migration guide)
+2. Set environment variables for source credentials (JIRA, GitHub)
+3. Use new CLI commands: `devassist brief`, `devassist ai`
+4. No Claude API key setup required
 
 ## 📋 Requirements
 
 - **Python**: 3.11+ (uses modern syntax with `|` unions)
-- **Claude API**: Access to Claude models via Agent SDK
-- **MCP Servers**: Configured for desired integrations
-- **API Credentials**: For each context source (Gmail, Slack, etc.)
+- **Claude Agent SDK**: Handles AI authentication automatically
+- **MCP Servers**: Configured for desired integrations (JIRA, GitHub)
+- **Source Credentials**: For each context source (JIRA, GitHub tokens)
 
 ## 🤝 Contributing
 

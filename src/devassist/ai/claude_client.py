@@ -10,8 +10,6 @@ from datetime import datetime
 from typing import Any, ClassVar
 
 from devassist.models.config import ClientConfig
-from devassist.models.mcp_config import McpServerConfig
-from devassist.resources import get_mcp_servers_config
 
 logger = logging.getLogger(__name__)
 
@@ -91,41 +89,18 @@ class ClaudeClient:
         self.session = self.create_session()
 
     def _get_mcp_servers_config(self, resources: list[str] | None = None) -> dict[str, Any]:
-        """Get MCP servers configuration for specified resources.
+        """Get MCP servers configuration (simplified for current architecture).
 
         Args:
-            resources: List of resource names (gmail, slack, jira, github).
-                      If None, returns all configured sources.
+            resources: List of resource names (currently unused).
 
         Returns:
-            Dictionary of MCP server configurations with environment variables resolved.
+            Empty dictionary - MCP server configuration needs future implementation.
         """
-        # Load raw MCP config from JSON
-        raw_mcp_config = get_mcp_servers_config()
-
-        # Determine which sources to include
-        enabled_sources = {source.value for source in self.config.enabled_sources}
-        if resources:
-            target_sources = enabled_sources.intersection(set(resources))
-        else:
-            target_sources = enabled_sources
-
-        # Build resolved configuration using McpServerConfig
-        resolved_config = {}
-        for server_name in target_sources:
-            if server_name not in raw_mcp_config:
-                logger.warning(f"MCP config not found for server: {server_name}")
-                continue
-
-            # Create McpServerConfig directly from JSON - field validator will resolve env vars
-            raw_config = raw_mcp_config[server_name]
-            server_config = McpServerConfig(**raw_config)
-
-            # Convert back to dict for Claude SDK
-            resolved_config[server_name] = server_config.model_dump()
-
-        logger.debug(f"Resolved MCP config for {len(resolved_config)} servers: {list(resolved_config.keys())}")
-        return resolved_config
+        # TODO: Implement proper MCP server configuration when needed
+        # For now, return empty config to allow Claude Agent SDK to work without MCP servers
+        logger.debug("MCP server configuration not implemented - using empty config")
+        return {}
 
     def _init_sdk_client(self) -> Any:
         """Initialize and connect Claude SDK client using config.

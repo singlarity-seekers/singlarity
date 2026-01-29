@@ -22,14 +22,11 @@ from devassist.models.context import SourceType
 
 # Import resources functions with safe fallback
 try:
-    from devassist.resources import get_system_prompt, get_mcp_servers_config
+    from devassist.resources import get_system_prompt
 except ImportError:
     # Fallback for testing
     def get_system_prompt() -> str:
         return "You are a helpful developer assistant."
-
-    def get_mcp_servers_config() -> dict:
-        return {}
 
 logger = logging.getLogger(__name__)
 
@@ -303,85 +300,33 @@ class ClientConfig(BaseModel):
 
         return str(self.system_prompt)
 
-    def get_mcp_servers_config(self) -> dict[str, Any]:
-        """Get MCP servers configuration for enabled sources.
-
-        Returns:
-            Dictionary of MCP server configurations with environment variables resolved.
-        """
-        import os
-        from devassist.models.mcp_config import McpServerConfig
-        from devassist.resources import get_mcp_servers_config
-
-        # Load raw MCP config from JSON
-        raw_mcp_config = get_mcp_servers_config()
-
-        # Determine which sources to include
-        enabled_sources = {source.value for source in self.enabled_sources}
-
-        # Build resolved configuration using McpServerConfig
-        resolved_config = {}
-        for server_name in enabled_sources:
-            if server_name not in raw_mcp_config:
-                logger.warning(f"MCP config not found for server: {server_name}")
-                continue
-
-            # Get source-specific config for environment variable mapping
-            source_config = self.source_configs.get(server_name, {})
-
-            # Create a mapping of environment variables to source config values
-            env_mappings = {}
-            if server_name == "jira":
-                if "url" in source_config:
-                    env_mappings["JIRA_URL"] = source_config["url"]
-                if "username" in source_config:
-                    env_mappings["JIRA_USERNAME"] = source_config["username"]
-            elif server_name == "github":
-                if "token" in source_config:
-                    env_mappings["GITHUB_TOKEN"] = source_config["token"]
-            # Add more mappings as needed for other sources
-
-            # Temporarily set environment variables from source config
-            original_env = {}
-            for env_var, value in env_mappings.items():
-                # Only set if not already in environment (real env vars take precedence)
-                if env_var not in os.environ:
-                    original_env[env_var] = os.environ.get(env_var)
-                    os.environ[env_var] = value
-
-            try:
-                # Create McpServerConfig - field validator will resolve env vars
-                raw_config = raw_mcp_config[server_name]
-                server_config = McpServerConfig(**raw_config)
-
-                # Convert back to dict for Claude SDK
-                resolved_config[server_name] = server_config.model_dump()
-            finally:
-                # Restore original environment
-                for env_var in env_mappings:
-                    if original_env.get(env_var) is None:
-                        os.environ.pop(env_var, None)
-                    else:
-                        os.environ[env_var] = original_env[env_var]
-
-        logger.debug(f"Resolved MCP config for {len(resolved_config)} servers: {list(resolved_config.keys())}")
-        return resolved_config
 
     @classmethod
     def get_available_sources(cls) -> list[SourceType]:
-        """Auto-discover available MCP servers."""
+        """Get available source types based on configured MCP servers."""
         try:
+            from devassist.resources import get_mcp_servers_config
             mcp_config = get_mcp_servers_config()
             available = []
-            for source_name in mcp_config.keys():
+
+            # Check which sources have corresponding MCP servers configured
+            for server_name in mcp_config.keys():
                 try:
-                    available.append(SourceType(source_name))
+                    source_type = SourceType(server_name)
+                    available.append(source_type)
+                    logger.debug(f"Found available source: {server_name}")
                 except ValueError:
-                    logger.debug(f"Skipping unknown source type: {source_name}")
-            return available
+                    logger.debug(f"Skipping unknown source type: {server_name}")
+
+            if available:
+                logger.info(f"Available sources from MCP config: {[s.value for s in available]}")
+                return available
+            else:
+                logger.warning("No valid sources found in MCP config, falling back to all sources")
+                return list(SourceType)
+
         except Exception as e:
-            logger.warning(f"Failed to get available sources: {e}")
-            # Fallback to all known sources
+            logger.warning(f"Failed to load MCP config: {e}, falling back to all sources")
             return list(SourceType)
 
 

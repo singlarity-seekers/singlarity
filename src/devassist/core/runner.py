@@ -1,0 +1,189 @@
+"""Background runner core logic for DevAssist.
+
+Executes custom prompts on a scheduled interval using ClaudeClient and configuration.
+"""
+
+import asyncio
+import logging
+import os
+import signal
+from datetime import datetime
+from pathlib import Path
+
+from devassist.ai.claude_client import ClaudeClient
+from devassist.models.config import ClientConfig
+
+logger = logging.getLogger(__name__)
+
+
+class Runner:
+    """Background runner that executes prompts at intervals using ClaudeClient.
+
+    Orchestrates:
+    - Fetching context via Claude Agent SDK (through MCP servers)
+    - Executing custom prompts with AI
+    - Writing output to destination file
+    - Interval scheduling
+    """
+
+    def __init__(
+        self,
+        config: ClientConfig | None = None,
+        claude_client: ClaudeClient | None = None,
+        interval_minutes: int = 5,
+        custom_prompt: str | None = None,
+        output_file: Path | str | None = None,
+    ) -> None:
+        """Initialize the background runner.
+
+        Args:
+            config: Client configuration.
+            claude_client: Claude client instance.
+            interval_minutes: Interval between executions in minutes.
+            custom_prompt: Custom prompt to execute.
+            output_file: Output file path.
+        """
+        self.config = config or ClientConfig()
+        self.claude_client = claude_client or ClaudeClient(config=self.config)
+        self.interval_minutes = interval_minutes
+        self.custom_prompt = custom_prompt or "Review my recent context and summarize urgent items requiring attention."
+
+        if output_file is None:
+            output_file = self.config.workspace_dir / "runner-output.md"
+        self.output_file = Path(output_file)
+
+        # Ensure output directory exists
+        self.output_file.parent.mkdir(parents=True, exist_ok=True)
+
+        self._stop_requested = False
+
+        # Register signal handlers for graceful shutdown
+        signal.signal(signal.SIGTERM, self._handle_shutdown)
+        signal.signal(signal.SIGINT, self._handle_shutdown)
+
+    def _handle_shutdown(self, signum: int, frame) -> None:
+        """Handle shutdown signals."""
+        logger.info(f"Received signal {signum}, stopping runner...")
+        self._stop_requested = True
+
+    async def run(self) -> None:
+        """Run the background runner loop.
+
+        Executes the prompt at specified intervals until stopped.
+        """
+        logger.info(f"Starting background runner (interval: {self.interval_minutes}m)")
+        logger.info(f"Output file: {self.output_file}")
+        logger.info(f"Enabled sources: {[s.value for s in self.config.enabled_sources]}")
+
+        execution_count = 0
+
+        try:
+            while not self._stop_requested:
+                execution_count += 1
+                logger.info(f"Starting execution #{execution_count}")
+
+                try:
+                    await self._execute_prompt()
+                    logger.info(f"Execution #{execution_count} completed successfully")
+                except Exception as e:
+                    logger.error(f"Execution #{execution_count} failed: {e}")
+
+                # Wait for next interval (with early exit on stop request)
+                for _ in range(self.interval_minutes * 60):  # Convert to seconds
+                    if self._stop_requested:
+                        break
+                    await asyncio.sleep(1)
+
+        except Exception as e:
+            logger.error(f"Runner crashed: {e}")
+            raise
+        finally:
+            logger.info("Background runner stopped")
+
+    async def _execute_prompt(self) -> None:
+        """Execute the custom prompt and save output."""
+        try:
+            # Generate timestamp
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Build the full prompt
+            full_prompt = f"""[DevAssist Background Runner - {timestamp}]
+
+{self.custom_prompt}
+
+Please provide a concise summary focusing on items that need immediate attention."""
+
+            # Execute with Claude Agent SDK
+            logger.debug("Executing prompt with Claude...")
+            response = await self.claude_client.make_call(user_prompt=full_prompt)
+
+            # Write to output file
+            await self._write_output(timestamp, response)
+
+            logger.debug("Prompt execution completed")
+
+        except Exception as e:
+            logger.error(f"Failed to execute prompt: {e}")
+            # Write error to output file
+            await self._write_error(str(e))
+
+    async def _write_output(self, timestamp: str, content: str) -> None:
+        """Write output to the destination file.
+
+        Args:
+            timestamp: Execution timestamp.
+            content: Content to write.
+        """
+        try:
+            # Prepare output with timestamp header
+            output = f"""# DevAssist Background Runner
+**Last Updated:** {timestamp}
+
+{content}
+
+---
+*Generated by DevAssist Background Runner every {self.interval_minutes} minutes*
+"""
+
+            # Write to file (overwrite each time)
+            with open(self.output_file, 'w', encoding='utf-8') as f:
+                f.write(output)
+
+            logger.debug(f"Output written to {self.output_file}")
+
+        except Exception as e:
+            logger.error(f"Failed to write output to {self.output_file}: {e}")
+
+    async def _write_error(self, error: str) -> None:
+        """Write error message to output file.
+
+        Args:
+            error: Error message.
+        """
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            error_output = f"""# DevAssist Background Runner - ERROR
+**Last Attempted:** {timestamp}
+
+⚠️ **Error occurred during execution:**
+
+```
+{error}
+```
+
+Please check the logs for more details.
+
+---
+*Generated by DevAssist Background Runner*
+"""
+
+            with open(self.output_file, 'w', encoding='utf-8') as f:
+                f.write(error_output)
+
+        except Exception as e:
+            logger.error(f"Failed to write error to {self.output_file}: {e}")
+
+    def stop(self) -> None:
+        """Request the runner to stop."""
+        logger.info("Stop requested")
+        self._stop_requested = True

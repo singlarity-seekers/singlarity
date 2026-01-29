@@ -110,36 +110,6 @@ class TestClaudeClient:
             assert client.session is not None
             assert client.session.session_id is not None
 
-    def test_get_mcp_servers_config(self, client):
-        """Test getting MCP servers configuration."""
-        mock_mcp_config = {
-            "gmail": {"command": "mcp-server-gmail", "env": {}},
-            "slack": {"command": "mcp-server-slack", "env": {}},
-            "jira": {"command": "mcp-server-jira", "env": {}},
-        }
-
-        with patch("devassist.ai.claude_client.get_mcp_servers_config", return_value=mock_mcp_config):
-            # Should filter only configured sources
-            servers = client._get_mcp_servers_config(resources=["gmail"])
-
-            assert "gmail" in servers
-            assert "jira" not in servers  # Not configured in ClientConfig
-            assert "github" not in servers  # Not configured
-
-    def test_get_mcp_servers_config_all(self, client):
-        """Test getting all configured MCP servers."""
-        mock_mcp_config = {
-            "gmail": {"command": "mcp-server-gmail", "env": {}},
-            "slack": {"command": "mcp-server-slack", "env": {}},
-            "jira": {"command": "mcp-server-jira", "env": {}},
-        }
-
-        with patch("devassist.ai.claude_client.get_mcp_servers_config", return_value=mock_mcp_config):
-            servers = client._get_mcp_servers_config(resources=None)
-
-            # Should include all configured sources
-            assert "gmail" in servers
-            assert "slack" in servers
 
     @pytest.mark.skip(reason="Test needs update for new static session architecture")
     @pytest.mark.asyncio

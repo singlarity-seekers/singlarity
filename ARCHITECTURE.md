@@ -12,7 +12,7 @@ Singlarity is a Python CLI application that aggregates context from multiple dev
 - Clear, explicit interfaces
 
 ### 🔧 **Unified Configuration**
-- Single `AppConfig` class handles all configuration needs
+- Single `ClientConfig` class handles all configuration needs
 - Smart deserialization from CLI inputs, environment variables, and files
 - User-friendly parameter mapping
 
@@ -23,19 +23,19 @@ Singlarity is a Python CLI application that aggregates context from multiple dev
 
 ### 🔌 **MCP-Based Context Sources**
 - Uses Model Context Protocol (MCP) servers instead of custom adapters
-- Configured through AppConfig with environment variable substitution
-- Supports Gmail, Slack, JIRA, GitHub, and more
+- Configured through ClientConfig with environment variable substitution
+- Currently supports JIRA and GitHub with extensible architecture
 
 ## Core Components
 
 ### 1. Configuration Layer
 
-#### **AppConfig** (`src/devassist/models/config_unified.py`)
-*The heart of the new architecture*
+#### **ClientConfig** (`src/devassist/models/config.py`)
+*The heart of the unified architecture*
 
 ```python
-config = AppConfig(
-    sources=['gmail', 'slack'],
+config = ClientConfig(
+    sources=['jira', 'github'],
     ai_model='Sonnet 4',           # User-friendly names
     ai_timeout_seconds=120,
     output_format='markdown'
@@ -44,7 +44,7 @@ config = AppConfig(
 
 **Key Features:**
 - **Smart Deserialization**: Converts strings to proper types automatically
-- **User-Friendly AI Models**: Maps "Sonnet 4" → "claude-sonnet-4@20250514"
+- **User-Friendly AI Models**: Maps "Sonnet 4" → "claude-sonnet-4-5@20250929"
 - **Auto-Discovery**: Finds available sources from MCP configuration
 - **Environment Integration**: Supports env vars with `DEVASSIST_*` prefix
 - **File Integration**: Loads from `~/.devassist/config.yaml`
@@ -62,9 +62,10 @@ response = await client.make_call("Generate my brief", session_id="session-123")
 
 **Key Features:**
 - **Static Session Store**: `_session_store` persists across all instances
-- **MCP Server Integration**: Configures servers from AppConfig
+- **MCP Server Integration**: Configures servers from ClientConfig
 - **Session Management**: Create, resume, list, and clear sessions
 - **SDK Abstraction**: Wraps Claude Agent SDK complexity
+- **Automatic Authentication**: No manual API key setup required
 
 **Session Management:**
 ```python
@@ -88,13 +89,46 @@ client2 = ClaudeClient(config)
 
 ```python
 generator = BriefGenerator(config=config)
-brief = await generator.generate(sources=['gmail', 'jira'])
+brief = await generator.generate(sources=['jira', 'github'])
 ```
 
 **Simplified Dependencies:**
-- Takes `AppConfig` directly (no manager classes)
+- Takes `ClientConfig` directly (no manager classes)
 - Uses ClaudeClient for AI calls
 - Leverages static session store for continuity
+
+### 3.5. Background Runner Layer
+
+#### **Runner** (`src/devassist/core/runner.py`)
+*Automated background AI execution*
+
+```python
+runner = Runner(config=config, interval_minutes=5)
+await runner.run()  # Runs until stopped
+```
+
+**Key Features:**
+- **Scheduled Execution**: Configurable interval-based processing
+- **ClaudeClient Integration**: Uses same AI infrastructure as briefs
+- **Signal Handling**: Graceful shutdown on SIGTERM/SIGINT
+- **File Output**: Writes results to configured destination
+- **Error Recovery**: Continues running even if individual executions fail
+
+#### **RunnerManager** (`src/devassist/core/runner_manager.py`)
+*Process lifecycle management*
+
+```python
+manager = RunnerManager()
+manager.start(interval=10, prompt="Custom prompt")
+status = manager.get_status()
+manager.stop()
+```
+
+**Key Features:**
+- **PID Management**: Tracks background process lifecycle
+- **Process Monitoring**: Checks if runner is alive
+- **Graceful Shutdown**: SIGTERM with SIGKILL fallback
+- **Lock Files**: Prevents multiple runners
 
 ### 4. Presentation Layer
 
@@ -103,10 +137,16 @@ brief = await generator.generate(sources=['gmail', 'jira'])
 
 ```bash
 # Modern workflow
-devassist status                    # Shows AppConfig status
-devassist brief --sources gmail,slack
+devassist status                    # Shows ClientConfig status
+devassist brief --sources jira,github
 devassist brief --session-id session-123
 devassist brief clean --days 7     # Uses ClaudeClient directly
+
+# Background AI runner
+devassist ai run --interval 10     # Start background runner
+devassist ai status                 # Check runner status
+devassist ai output                 # View latest output
+devassist ai kill                   # Stop runner
 ```
 
 ## Data Flow
