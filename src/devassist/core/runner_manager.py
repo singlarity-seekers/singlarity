@@ -127,8 +127,13 @@ class RunnerManager:
             # Open log file for stdout/stderr redirection
             log_file = open(log_path, "a")
 
-            # Pass CLI options via environment variables
+            # Build environment: start with current env, then source shell profile
             env = os.environ.copy()
+
+            # Source user's shell profile to get MCP credentials and other env vars
+            # This ensures background process has access to vars like JIRA_*, GITHUB_TOKEN
+            shell_profile = self._get_shell_profile_vars()
+            env.update(shell_profile)
             if interval is not None:
                 env["DEVASSIST_RUNNER_INTERVAL"] = str(interval)
             if prompt is not None:
@@ -224,3 +229,49 @@ class RunnerManager:
             Path to log file.
         """
         return self.workspace_dir / "logs" / "runner.log"
+
+    def _get_shell_profile_vars(self) -> dict[str, str]:
+        """Source user's shell profile and extract environment variables.
+
+        Sources ~/.zshrc or ~/.bashrc to get MCP credentials and other
+        environment variables that may not be in the current process.
+
+        Returns:
+            Dictionary of environment variables from shell profile.
+        """
+        shell_profile = Path.home() / ".zshrc"
+        if not shell_profile.exists():
+            shell_profile = Path.home() / ".bashrc"
+        if not shell_profile.exists():
+            logger.debug("No shell profile found (.zshrc or .bashrc)")
+            return {}
+
+        try:
+            # Source the profile and print all environment variables
+            result = subprocess.run(
+                ["bash", "-c", f"source {shell_profile} 2>/dev/null && env"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode != 0:
+                logger.debug(f"Failed to source shell profile: {result.stderr}")
+                return {}
+
+            # Parse env output into dict
+            env_vars = {}
+            for line in result.stdout.splitlines():
+                if "=" in line:
+                    key, _, value = line.partition("=")
+                    # Only include MCP-relevant variables
+                    if key.startswith(("JIRA_", "GITHUB_", "SLACK_", "GOOGLE_", "ANTHROPIC_")):
+                        env_vars[key] = value
+
+            logger.debug(f"Sourced {len(env_vars)} MCP-related env vars from shell profile")
+            return env_vars
+        except subprocess.TimeoutExpired:
+            logger.warning("Timeout sourcing shell profile")
+            return {}
+        except Exception as e:
+            logger.warning(f"Error sourcing shell profile: {e}")
+            return {}
