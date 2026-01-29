@@ -60,7 +60,12 @@ class BriefGenerator:
             resources = [source.value for source in self._config.enabled_sources]
 
         # Build the prompt for Claude
-        prompt = user_prompt or self._build_brief_prompt(resources)
+        if user_prompt:
+            # Append custom prompt to default brief prompt
+            prompt = self._build_brief_prompt(resources, additional_prompt=user_prompt)
+        else:
+            # Use default prompt only
+            prompt = self._build_brief_prompt(resources)
 
         # Make the call to Claude
         try:
@@ -99,18 +104,19 @@ class BriefGenerator:
                 sources_failed=resources,
             )
 
-    def _build_brief_prompt(self, resources: list[str]) -> str:
+    def _build_brief_prompt(self, resources: list[str], additional_prompt: str | None = None) -> str:
         """Build the prompt for morning brief generation.
 
         Args:
             resources: List of resource names.
+            additional_prompt: Optional additional prompt to append.
 
         Returns:
             Prompt string.
         """
         resources_str = ", ".join(resources)
 
-        return f"""Generate my daily morning brief by aggregating information from {resources_str}.
+        base_prompt = f"""Generate my daily morning brief by aggregating information from {resources_str}.
 
 Please organize the brief with these sections:
 
@@ -126,8 +132,12 @@ For each section, include:
 - Relevant links
 - Priority indicators where appropriate
 
-Focus on items from the last 24-48 hours unless they are ongoing priorities.
-"""
+Focus on items from the last 24-48 hours unless they are ongoing priorities."""
+
+        if additional_prompt:
+            return f"{base_prompt}\n\nAdditional requirements:\n{additional_prompt}"
+
+        return base_prompt
 
     def _parse_response_to_brief(self, response: str, resources: list[str]) -> Brief:
         """Parse Claude's response into a Brief object.

@@ -164,18 +164,19 @@ def generate_brief(
                 if not json_output:
                     console.print(f"[dim]Resuming session: {target_session_id}[/dim]")
 
-        # Handle follow-up vs new brief
+        # Handle follow-up vs new brief with custom prompt
         if prompt and target_session_id:
-            # Follow-up question
+            # Follow-up question on existing session
             response = asyncio.run(
                 generator.resume_brief_session(target_session_id, prompt)
             )
         else:
-            # Generate new brief
+            # Generate new brief (with optional custom prompt)
             brief = asyncio.run(
                 generator.generate(
                     sources=source_filter,
                     refresh=refresh,
+                    user_prompt=prompt,  # Pass custom prompt if provided
                     session_id=target_session_id,
                 )
             )

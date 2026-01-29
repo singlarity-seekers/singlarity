@@ -56,6 +56,8 @@ class McpServerConfig(BaseModel):
                     default_value = defaults.get(key, "")
                     resolved_env[key] = default_value
                     logger.debug(f"Resolved {key} to default: {'✓' if default_value else '✗'}")
+                if not resolved_env[key]:
+                    raise RuntimeError(f"Required environment variable {key} is missing")
             elif value.startswith("${") and value.endswith("}"):
                 # Handle placeholder syntax like ${JIRA_URL}
                 env_var_name = value[2:-1]  # Remove ${ and }
