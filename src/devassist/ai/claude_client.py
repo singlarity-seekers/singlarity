@@ -23,8 +23,9 @@ from devassist.resources import get_mcp_servers_config
 logger = logging.getLogger(__name__)
 
 
-# Session persistence file name
-SESSION_FILE = "claude-session.json"
+# Session persistence
+SESSIONS_DIR = "sessions"
+CURRENT_SESSION_FILE = "current-session-id"
 
 
 @dataclass
@@ -111,15 +112,24 @@ class ClaudeClient:
 
         self._system_prompt_override = system_prompt
 
-        # Load persisted session if available
-        self.session = self._load_session_from_file()
-        if not self.session:
-            self.session = self.create_session()
+        # Ensure sessions directory exists
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+
+        # Load all persisted sessions into memory
+        self._load_all_sessions()
+
+        # Load current session if available
+        self.session = self._get_current_session()
 
     @property
-    def session_file(self) -> Path:
-        """Get the session file path."""
-        return self.workspace_dir / SESSION_FILE
+    def sessions_dir(self) -> Path:
+        """Get the sessions directory path."""
+        return self.workspace_dir / SESSIONS_DIR
+
+    @property
+    def current_session_file(self) -> Path:
+        """Get the current session pointer file path."""
+        return self.workspace_dir / CURRENT_SESSION_FILE
 
     @property
     def effective_system_prompt(self) -> str:
@@ -128,34 +138,64 @@ class ClaudeClient:
             return self._system_prompt_override
         return self.config.resolved_system_prompt
 
-    def _load_session_from_file(self) -> ClaudeSession | None:
-        """Load session from file if it exists.
+    def _load_all_sessions(self) -> None:
+        """Load all sessions from the sessions directory into memory."""
+        if not self.sessions_dir.exists():
+            return
+
+        for session_file in self.sessions_dir.glob("*.json"):
+            try:
+                data = json.loads(session_file.read_text())
+                session = ClaudeSession.from_dict(data)
+                ClaudeClient._session_store[session.session_id] = session
+                logger.debug(f"Loaded session: {session.session_id}")
+            except Exception as e:
+                logger.warning(f"Failed to load session from {session_file}: {e}")
+
+        logger.info(f"Loaded {len(ClaudeClient._session_store)} sessions from disk")
+
+    def _get_current_session(self) -> ClaudeSession | None:
+        """Get the current session from the pointer file.
 
         Returns:
-            ClaudeSession or None if no persisted session.
+            ClaudeSession or None if no current session.
         """
-        if not self.session_file.exists():
+        if not self.current_session_file.exists():
             return None
 
         try:
-            data = json.loads(self.session_file.read_text())
-            session = ClaudeSession.from_dict(data)
-            # Also add to in-memory store
-            ClaudeClient._session_store[session.session_id] = session
-            logger.info(f"Loaded session from file: {session.session_id}")
+            session_id = self.current_session_file.read_text().strip()
+            session = ClaudeClient._session_store.get(session_id)
+            if session:
+                logger.info(f"Current session: {session_id}")
             return session
         except Exception as e:
-            logger.warning(f"Failed to load session from file: {e}")
+            logger.warning(f"Failed to read current session: {e}")
             return None
 
+    def _set_current_session(self, session_id: str) -> None:
+        """Set the current session pointer.
+
+        Args:
+            session_id: Session ID to set as current.
+        """
+        try:
+            self.current_session_file.write_text(session_id)
+            logger.debug(f"Set current session: {session_id}")
+        except Exception as e:
+            logger.error(f"Failed to set current session: {e}")
+
     def _save_session_to_file(self, session: ClaudeSession) -> None:
-        """Save session to file for persistence.
+        """Save session to the sessions directory.
 
         Args:
             session: Session to save.
         """
         try:
-            self.session_file.write_text(json.dumps(session.to_dict(), indent=2))
+            # Use a safe filename (replace special chars)
+            safe_id = session.session_id.replace("/", "_").replace("\\", "_")
+            session_file = self.sessions_dir / f"{safe_id}.json"
+            session_file.write_text(json.dumps(session.to_dict(), indent=2))
             logger.debug(f"Saved session to file: {session.session_id}")
         except Exception as e:
             logger.error(f"Failed to save session to file: {e}")
@@ -232,6 +272,7 @@ class ClaudeClient:
         # Store session in memory and file
         ClaudeClient._session_store[session_id] = session
         self._save_session_to_file(session)
+        self._set_current_session(session_id)
 
         logger.info(f"Created Claude session: {session_id}")
         return session
@@ -300,9 +341,10 @@ class ClaudeClient:
             if new_session_id and self.session:
                 old_session_id = self.session.session_id
                 if new_session_id != old_session_id:
-                    # Remove old session from store if it was a pending session
+                    # Remove old pending session from store and disk
                     if old_session_id.startswith("pending-"):
                         ClaudeClient._session_store.pop(old_session_id, None)
+                        self.delete_session(old_session_id)
                     # Update to real SDK session ID
                     self.session.session_id = new_session_id
                     logger.info(f"Updated session ID: {old_session_id} -> {new_session_id}")
@@ -310,6 +352,7 @@ class ClaudeClient:
                 self.session.turns += 1
                 ClaudeClient._session_store[self.session.session_id] = self.session
                 self._save_session_to_file(self.session)
+                self._set_current_session(self.session.session_id)
 
         except Exception as e:
             logger.error(f"Error executing prompt: {e}", exc_info=True)
@@ -318,18 +361,37 @@ class ClaudeClient:
         return response_text
 
     def clear_session(self) -> None:
-        """Clear the current session."""
+        """Clear the current session pointer (session data is preserved)."""
         if self.session:
-            # Remove from memory store
-            if self.session.session_id in ClaudeClient._session_store:
-                del ClaudeClient._session_store[self.session.session_id]
-
-            # Remove persisted file
-            if self.session_file.exists():
-                self.session_file.unlink()
-
-            logger.info(f"Cleared session: {self.session.session_id}")
+            logger.info(f"Cleared current session: {self.session.session_id}")
             self.session = None
+
+        # Clear the current session pointer file
+        if self.current_session_file.exists():
+            self.current_session_file.unlink()
+
+    def delete_session(self, session_id: str) -> bool:
+        """Delete a session permanently.
+
+        Args:
+            session_id: Session ID to delete.
+
+        Returns:
+            True if deleted, False if not found.
+        """
+        # Remove from memory store
+        if session_id in ClaudeClient._session_store:
+            del ClaudeClient._session_store[session_id]
+
+        # Remove session file
+        safe_id = session_id.replace("/", "_").replace("\\", "_")
+        session_file = self.sessions_dir / f"{safe_id}.json"
+        if session_file.exists():
+            session_file.unlink()
+            logger.info(f"Deleted session: {session_id}")
+            return True
+
+        return False
 
     def list_sessions(self) -> list[ClaudeSession]:
         """List all active sessions.
@@ -372,14 +434,31 @@ class ClaudeClient:
         return cls._session_store.get(session_id)
 
     @classmethod
-    def clear_all_sessions(cls) -> None:
-        """Clear all sessions from the static store.
+    def clear_all_sessions(cls, workspace_dir: Path | None = None) -> None:
+        """Clear all sessions from store and disk.
 
         WARNING: This removes all sessions for all ClaudeClient instances.
+
+        Args:
+            workspace_dir: Workspace directory. Defaults to ~/.devassist.
         """
         count = len(cls._session_store)
         cls._session_store.clear()
-        logger.info(f"Cleared all {count} sessions from static store")
+
+        # Also delete session files from disk
+        if workspace_dir is None:
+            workspace_dir = Path.home() / ".devassist"
+        sessions_dir = workspace_dir / SESSIONS_DIR
+        if sessions_dir.exists():
+            for session_file in sessions_dir.glob("*.json"):
+                session_file.unlink()
+
+        # Clear current session pointer
+        current_file = workspace_dir / CURRENT_SESSION_FILE
+        if current_file.exists():
+            current_file.unlink()
+
+        logger.info(f"Cleared all {count} sessions from store and disk")
 
     @classmethod
     def get_session_ids(cls) -> list[str]:

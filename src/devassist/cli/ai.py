@@ -118,8 +118,7 @@ def get_claude_client(
     )
 
     if new_session:
-        # Clear existing session and create fresh one
-        client.clear_session()
+        # Create a new session (old sessions are preserved)
         client.session = client.create_session()
     elif session_id:
         # Find session by ID prefix
@@ -131,16 +130,23 @@ def get_claude_client(
         if matching_session:
             client.session = matching_session
             client._save_session_to_file(matching_session)
+            client._set_current_session(matching_session.session_id)
         else:
             console.print(f"[yellow]Session '{session_id}' not found. Creating new session.[/yellow]")
-            client.clear_session()
             client.session = client.create_session()
     elif resume_session:
-        # Use the most recent session (already loaded by default)
-        pass
+        # Use the current session (already loaded by default)
+        if not client.session:
+            # No current session, get the most recent one
+            latest = client.get_latest_session()
+            if latest:
+                client.session = latest
+                client._set_current_session(latest.session_id)
+            else:
+                console.print("[yellow]No previous session found. Creating new session.[/yellow]")
+                client.session = client.create_session()
     else:
         # Default: create new session
-        client.clear_session()
         client.session = client.create_session()
 
     return client
@@ -519,11 +525,6 @@ def list_sessions(
         if count == 0:
             console.print("[yellow]No sessions to clear.[/yellow]")
             return
-
-        # Also clear the persisted session file
-        claude_client = get_claude_client()
-        if claude_client.session:
-            claude_client.clear_session()
 
         ClaudeClient.clear_all_sessions()
         console.print(f"[green]Cleared {count} session(s).[/green]")
