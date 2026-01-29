@@ -504,6 +504,28 @@ def clear_session() -> None:
         console.print("[yellow]No active session to clear.[/yellow]")
 
 
+def _load_sessions_only() -> None:
+    """Load all sessions from disk without creating a new one."""
+    from pathlib import Path
+
+    workspace_dir = Path.home() / ".devassist"
+    sessions_dir = workspace_dir / "sessions"
+
+    if not sessions_dir.exists():
+        return
+
+    import json
+    from devassist.ai.claude_client import ClaudeSession
+
+    for session_file in sessions_dir.glob("*.json"):
+        try:
+            data = json.loads(session_file.read_text())
+            session = ClaudeSession.from_dict(data)
+            ClaudeClient._session_store[session.session_id] = session
+        except Exception:
+            pass
+
+
 @app.command("sessions")
 def list_sessions(
     clear_all: bool = typer.Option(
@@ -517,8 +539,8 @@ def list_sessions(
     Shows all sessions in the static session store with their details.
     Use --clear-all to remove all sessions.
     """
-    # Initialize client to load any persisted sessions from file
-    _ = get_claude_client()
+    # Load sessions from disk without creating a new one
+    _load_sessions_only()
 
     if clear_all:
         count = ClaudeClient.get_session_count()
