@@ -409,3 +409,71 @@ def clear_session() -> None:
         console.print("The next run will start a fresh conversation.")
     else:
         console.print("[yellow]No active session to clear.[/yellow]")
+
+
+@app.command("sessions")
+def list_sessions(
+    clear_all: bool = typer.Option(
+        False,
+        "--clear-all",
+        help="Clear all sessions from the session store.",
+    ),
+) -> None:
+    """List all sessions or clear all sessions.
+
+    Shows all sessions in the static session store with their details.
+    Use --clear-all to remove all sessions.
+    """
+    # Initialize client to load any persisted sessions from file
+    _ = get_claude_client()
+
+    if clear_all:
+        count = ClaudeClient.get_session_count()
+        if count == 0:
+            console.print("[yellow]No sessions to clear.[/yellow]")
+            return
+
+        # Also clear the persisted session file
+        claude_client = get_claude_client()
+        if claude_client.session:
+            claude_client.clear_session()
+
+        ClaudeClient.clear_all_sessions()
+        console.print(f"[green]Cleared {count} session(s).[/green]")
+        return
+
+    # List all sessions
+    sessions = ClaudeClient.get_session_count()
+
+    if sessions == 0:
+        console.print("[yellow]No sessions found.[/yellow]")
+        console.print("Sessions are created when you run [bold]devassist ai run[/bold] or [bold]devassist prompt[/bold].")
+        return
+
+    # Build sessions table
+    table = Table(title="Sessions", show_header=True)
+    table.add_column("Session ID", style="cyan")
+    table.add_column("Created", style="dim")
+    table.add_column("Last Used", style="dim")
+    table.add_column("Turns", justify="right")
+    table.add_column("Resources")
+
+    for session_id in ClaudeClient.get_session_ids():
+        session = ClaudeClient.get_session_by_id(session_id)
+        if session:
+            created = session.created_at.strftime("%Y-%m-%d %H:%M")
+            last_used = session.last_used.strftime("%Y-%m-%d %H:%M")
+            resources = ", ".join(session.resources) if session.resources else "[dim]none[/dim]"
+            table.add_row(
+                session_id[:16] + "...",
+                created,
+                last_used,
+                str(session.turns),
+                resources,
+            )
+
+    console.print()
+    console.print(table)
+    console.print()
+    console.print(f"[dim]Total: {sessions} session(s)[/dim]")
+    console.print("[dim]Use --clear-all to remove all sessions.[/dim]")
