@@ -4,12 +4,12 @@ Handles starting, stopping, and monitoring the background runner process.
 """
 
 import logging
-import multiprocessing
 import os
 import signal
+import subprocess
+import sys
 import time
 from pathlib import Path
-from typing import Callable
 
 from pydantic import BaseModel
 
@@ -94,12 +94,11 @@ class RunnerManager:
         pid = read_pid_file(self.pid_file)
         return RunnerStatus(status="running", pid=pid)
 
-    def start(self, target: Callable[[], None], daemon: bool = True) -> None:
+    def start(self, target: str = "devassist.cli.ai:run_background_runner") -> None:
         """Start the background runner process.
 
         Args:
-            target: The function to run in the background.
-            daemon: Whether to run as daemon process.
+            target: Module path to the runner function (unused, kept for API compat).
 
         Raises:
             RuntimeError: If runner is already running or cannot acquire lock.
@@ -113,9 +112,24 @@ class RunnerManager:
             raise RuntimeError("Could not acquire lock - another instance may be starting")
 
         try:
-            # Create and start process
-            process = multiprocessing.Process(target=target, daemon=daemon)
-            process.start()
+            # Use subprocess to spawn a truly independent process
+            # This runs: python -c "from devassist.cli.ai import run_background_runner; run_background_runner()"
+            log_path = self.get_log_path()
+
+            # Open log file for stdout/stderr redirection
+            log_file = open(log_path, "a")
+
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    "from devassist.cli.ai import run_background_runner; run_background_runner()",
+                ],
+                stdout=log_file,
+                stderr=log_file,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,  # Detach from parent process group
+            )
 
             # Write PID file
             if process.pid is not None:

@@ -25,7 +25,7 @@ class ClaudeClient(BaseAIClient):
        when CLAUDE_CODE_USE_VERTEX=1 is set
     """
 
-    DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
+    DEFAULT_MODEL = "claude-sonnet-4-5@20250929"
     DEFAULT_MAX_TOKENS = 4096
     DEFAULT_TEMPERATURE = 0.7
     DEFAULT_MAX_RETRIES = 3

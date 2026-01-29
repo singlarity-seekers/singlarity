@@ -18,7 +18,7 @@ class ClaudeConfig(BaseModel):
     """Configuration for Anthropic Claude API."""
 
     api_key: str | None = None
-    model: str = "claude-sonnet-4-5-20250929"
+    model: str = "claude-sonnet-4-5@20250929"
     max_tokens: int = 4096
     temperature: float = 0.7
 

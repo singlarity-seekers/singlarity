@@ -228,7 +228,7 @@ def run_runner(
     else:
         # Run in background
         try:
-            runner_manager.start(target=run_background_runner)
+            runner_manager.start()
             status = runner_manager.get_status()
 
             console.print(
