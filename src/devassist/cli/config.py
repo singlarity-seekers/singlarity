@@ -272,7 +272,7 @@ def migrate_config() -> None:
     Converts the legacy config.yaml format to the new .mcp.json format,
     creating a backup of the original file.
     """
-    from devassist.models.mcp_config import AIProviderConfig, MCPConfig, VertexConfig
+    from devassist.models.runner_config import AIProviderConfig, MCPConfig, VertexConfig
 
     manager = ConfigManager()
     legacy_path = manager.workspace_dir / "config.yaml"

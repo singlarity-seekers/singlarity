@@ -6,7 +6,7 @@ from devassist.models.context import (
     ContextSource,
     SourceType,
 )
-from devassist.models.config import AIConfig, AppConfig, SourceConfig
+from devassist.models.config import AIConfig, AppConfig, ClientConfig, SourceConfig
 
 __all__ = [
     "ConnectionStatus",
@@ -15,5 +15,6 @@ __all__ = [
     "SourceType",
     "AIConfig",
     "AppConfig",
+    "ClientConfig",
     "SourceConfig",
 ]

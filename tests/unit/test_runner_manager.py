@@ -81,65 +81,56 @@ class TestRunnerManager:
         assert status.status == "running"
         assert status.pid == current_pid
 
-    @patch("devassist.core.runner_manager.multiprocessing.Process")
+    @patch("devassist.core.runner_manager.subprocess.Popen")
+    @patch("builtins.open", create=True)
     def test_start_creates_background_process(
-        self, mock_process_class: Mock, manager: RunnerManager
+        self, mock_open: Mock, mock_popen: Mock, manager: RunnerManager
     ) -> None:
         """Should create and start background process."""
         mock_process = MagicMock()
         mock_process.pid = 12345
-        mock_process_class.return_value = mock_process
+        mock_popen.return_value = mock_process
 
-        def mock_target():
-            pass
+        manager.start()
 
-        manager.start(target=mock_target)
-
-        # Should create process
-        mock_process_class.assert_called_once()
-        # Should start process
-        mock_process.start.assert_called_once()
+        # Should create process with Popen
+        mock_popen.assert_called_once()
         # Should write PID file
         assert manager.pid_file.exists()
         assert manager.pid_file.read_text().strip() == "12345"
 
-    @patch("devassist.core.runner_manager.multiprocessing.Process")
+    @patch("devassist.core.runner_manager.subprocess.Popen")
+    @patch("builtins.open", create=True)
     def test_start_acquires_lock(
-        self, mock_process_class: Mock, manager: RunnerManager
+        self, mock_open: Mock, mock_popen: Mock, manager: RunnerManager
     ) -> None:
         """Should acquire lock before starting."""
         mock_process = MagicMock()
         mock_process.pid = 12345
-        mock_process_class.return_value = mock_process
+        mock_popen.return_value = mock_process
 
-        def mock_target():
-            pass
-
-        manager.start(target=mock_target)
+        manager.start()
 
         # Lock file should exist
         assert manager.lock_file.exists()
 
-    @patch("devassist.core.runner_manager.multiprocessing.Process")
+    @patch("devassist.core.runner_manager.subprocess.Popen")
     def test_start_fails_if_already_running(
-        self, mock_process_class: Mock, manager: RunnerManager
+        self, mock_popen: Mock, manager: RunnerManager
     ) -> None:
         """Should raise error if runner is already running."""
         # Simulate already running
         manager.pid_file.write_text(str(os.getpid()))
 
-        def mock_target():
-            pass
-
         with pytest.raises(RuntimeError, match="already running"):
-            manager.start(target=mock_target)
+            manager.start()
 
         # Should not create new process
-        mock_process_class.assert_not_called()
+        mock_popen.assert_not_called()
 
-    @patch("devassist.core.runner_manager.multiprocessing.Process")
+    @patch("devassist.core.runner_manager.subprocess.Popen")
     def test_start_fails_if_cannot_acquire_lock(
-        self, mock_process_class: Mock, manager: RunnerManager
+        self, mock_popen: Mock, manager: RunnerManager
     ) -> None:
         """Should raise error if cannot acquire lock."""
         # Manually acquire the lock
@@ -147,13 +138,10 @@ class TestRunnerManager:
 
         acquire_lock(manager.lock_file)
 
-        def mock_target():
-            pass
-
         with pytest.raises(RuntimeError, match="acquire lock"):
-            manager.start(target=mock_target)
+            manager.start()
 
-        mock_process_class.assert_not_called()
+        mock_popen.assert_not_called()
 
     def test_stop_when_not_running(self, manager: RunnerManager) -> None:
         """Should handle stop when not running gracefully."""

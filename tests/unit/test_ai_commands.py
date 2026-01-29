@@ -8,7 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from devassist.cli.ai import app
-from devassist.models.mcp_config import MCPConfig
+from devassist.models.runner_config import MCPConfig
 
 
 runner = CliRunner()
@@ -87,27 +87,26 @@ class TestAIRunCommand:
         assert "already running" in result.output
 
     @patch("devassist.cli.ai.ConfigManager")
-    @patch("devassist.cli.ai.get_ai_client")
+    @patch("devassist.cli.ai.RunnerManager")
     def test_run_fails_without_api_key(
         self,
-        mock_get_client: Mock,
+        mock_runner_manager_class: Mock,
         mock_config_manager_class: Mock,
     ) -> None:
-        """Should fail if API key is not configured."""
-        config = MCPConfig(
-            ai={"provider": "claude", "claude": {"api_key": None}},
-        )
+        """Should fail if config is legacy AppConfig (not MCPConfig)."""
+        from devassist.models.config import AppConfig
+
+        # Return legacy AppConfig which is not supported
+        config = AppConfig()
 
         mock_config_manager = MagicMock()
         mock_config_manager.load_config.return_value = config
         mock_config_manager_class.return_value = mock_config_manager
 
-        mock_get_client.side_effect = RuntimeError("API key not configured")
-
         result = runner.invoke(app, ["run"])
 
         assert result.exit_code == 1
-        assert "API key" in result.output or "Error" in result.output
+        assert "Legacy" in result.output or "not supported" in result.output
 
 
 class TestAIKillCommand:

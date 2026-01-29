@@ -10,7 +10,7 @@ import pytest
 
 from devassist.core.runner import Runner
 from devassist.models.context import ContextItem, SourceType
-from devassist.models.mcp_config import MCPConfig, RunnerConfig
+from devassist.models.runner_config import MCPConfig, RunnerConfig
 
 
 class TestRunner:

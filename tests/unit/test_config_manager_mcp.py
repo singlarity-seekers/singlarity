@@ -10,7 +10,7 @@ import yaml
 
 from devassist.core.config_manager import ConfigManager
 from devassist.models.config import AppConfig
-from devassist.models.mcp_config import MCPConfig
+from devassist.models.runner_config import MCPConfig
 
 
 class TestMCPConfigLoading:

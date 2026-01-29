@@ -13,7 +13,7 @@ from typing import Any
 import yaml
 
 from devassist.models.config import AIConfig, AppConfig
-from devassist.models.mcp_config import MCPConfig, expand_env_vars
+from devassist.models.runner_config import MCPConfig, expand_env_vars
 
 logger = logging.getLogger(__name__)
 

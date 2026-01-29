@@ -30,7 +30,7 @@ class TestConfigManager:
         config = manager.load_config()
 
         # Now defaults to MCPConfig instead of AppConfig
-        from devassist.models.mcp_config import MCPConfig
+        from devassist.models.runner_config import MCPConfig
         assert isinstance(config, MCPConfig)
         assert config.sources == {}
 

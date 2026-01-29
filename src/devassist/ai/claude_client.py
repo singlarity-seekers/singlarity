@@ -1,262 +1,386 @@
-"""Claude AI client for DevAssist.
+"""Claude Agent SDK client for DevAssist.
 
-Handles AI operations using Anthropic's Claude API.
-Supports both direct Anthropic API and Vertex AI authentication.
+Manages Claude sessions and API calls using the Claude Agent SDK.
+Supports both stateful session management and simple query execution.
+Includes file-based session persistence for daemon use cases.
 """
 
-import asyncio
 import json
-import os
-from typing import Any
+import logging
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, ClassVar
 
-from anthropic import Anthropic, AnthropicVertex
+from claude_agent_sdk import ClaudeAgentOptions, query
+from claude_agent_sdk.types import AssistantMessage, TextBlock
 
-from devassist.ai.base_client import BaseAIClient
-from devassist.ai.prompts import NO_ITEMS_SUMMARY, build_summarization_prompt, get_system_prompt
-from devassist.models.context import ContextItem
+from devassist.models.config import ClientConfig
+from devassist.models.mcp_config import McpServerConfig
+from devassist.resources import get_mcp_servers_config
+
+logger = logging.getLogger(__name__)
 
 
-class ClaudeClient(BaseAIClient):
-    """Client for Anthropic Claude API interactions.
+# Session persistence file name
+SESSION_FILE = "claude-session.json"
 
-    Supports two authentication modes:
-    1. Direct API: Uses ANTHROPIC_API_KEY
-    2. Vertex AI: Uses Google Cloud Application Default Credentials
-       when CLAUDE_CODE_USE_VERTEX=1 is set
+
+@dataclass
+class ClaudeSession:
+    """Represents a Claude conversation session."""
+
+    session_id: str
+    created_at: datetime
+    last_used: datetime
+    resources: list[str]
+    turns: int = 0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize session to dictionary.
+
+        Returns:
+            Dictionary representation of session.
+        """
+        # Don't serialize sdk_client in metadata
+        safe_metadata = {k: v for k, v in self.metadata.items() if k != "sdk_client"}
+        return {
+            "session_id": self.session_id,
+            "created_at": self.created_at.isoformat(),
+            "last_used": self.last_used.isoformat(),
+            "resources": self.resources,
+            "turns": self.turns,
+            "metadata": safe_metadata,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ClaudeSession":
+        """Deserialize session from dictionary.
+
+        Args:
+            data: Dictionary containing session data.
+
+        Returns:
+            ClaudeSession instance.
+        """
+        return cls(
+            session_id=data["session_id"],
+            created_at=datetime.fromisoformat(data["created_at"]),
+            last_used=datetime.fromisoformat(data["last_used"]),
+            resources=data["resources"],
+            turns=data.get("turns", 0),
+            metadata=data.get("metadata", {}),
+        )
+
+
+class ClaudeClient:
+    """Client for interacting with Claude via the Agent SDK.
+
+    Manages sessions, MCP server configuration, and API calls.
+
+    Session Management:
+    - Uses file-based persistence for daemon/background use cases
+    - Sessions survive process restarts
+    - Also maintains in-memory store for current process
     """
 
-    DEFAULT_MODEL = "claude-sonnet-4-5@20250929"
-    DEFAULT_MAX_TOKENS = 4096
-    DEFAULT_TEMPERATURE = 0.7
-    DEFAULT_MAX_RETRIES = 3
-    DEFAULT_MAX_INPUT_TOKENS = 30000  # Conservative limit for context
+    # Static session store shared across all ClaudeClient instances
+    _session_store: ClassVar[dict[str, ClaudeSession]] = {}
 
     def __init__(
         self,
-        api_key: str | None = None,
-        model: str | None = None,
-        max_tokens: int | None = None,
-        temperature: float | None = None,
-        max_retries: int | None = None,
-        max_input_tokens: int | None = None,
-        project_id: str | None = None,
-        region: str | None = None,
+        config: ClientConfig | None = None,
+        workspace_dir: Path | str | None = None,
+        system_prompt: str | None = None,
     ) -> None:
         """Initialize ClaudeClient.
 
         Args:
-            api_key: Anthropic API key (not required if using Vertex AI).
-            model: Model name to use.
-            max_tokens: Maximum tokens in response.
-            temperature: Sampling temperature (0.0-1.0).
-            max_retries: Maximum retry attempts.
-            max_input_tokens: Maximum input tokens for context.
-            project_id: GCP project ID for Vertex AI (or use ANTHROPIC_VERTEX_PROJECT_ID env var).
-            region: GCP region for Vertex AI (or use CLOUD_ML_REGION env var).
-
-        Raises:
-            ValueError: If neither api_key nor Vertex AI configuration is available.
+            config: Application configuration.
+            workspace_dir: Path to workspace directory for session persistence.
+            system_prompt: Optional system prompt override.
         """
-        # Check if using Vertex AI
-        self.use_vertex = os.environ.get("CLAUDE_CODE_USE_VERTEX", "").lower() in ("1", "true")
+        self.config = config or ClientConfig()
 
-        if self.use_vertex:
-            # Vertex AI mode - use GCP credentials
-            self.project_id = project_id or os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID")
-            self.region = region or os.environ.get("CLOUD_ML_REGION", "us-east5")
+        if workspace_dir is None:
+            workspace_dir = Path.home() / ".devassist"
+        self.workspace_dir = Path(workspace_dir)
+        self.workspace_dir.mkdir(parents=True, exist_ok=True)
 
-            if not self.project_id:
-                raise ValueError(
-                    "Vertex AI mode requires project_id or ANTHROPIC_VERTEX_PROJECT_ID env var"
-                )
-            self.api_key = None
-        else:
-            # Direct API mode - requires API key
-            if not api_key:
-                raise ValueError(
-                    "api_key is required for ClaudeClient (or set CLAUDE_CODE_USE_VERTEX=1 for Vertex AI)"
-                )
-            self.api_key = api_key
-            self.project_id = None
-            self.region = None
+        self._system_prompt_override = system_prompt
 
-        self.model = model or self.DEFAULT_MODEL
-        self.max_tokens = max_tokens if max_tokens is not None else self.DEFAULT_MAX_TOKENS
-        self.temperature = (
-            temperature if temperature is not None else self.DEFAULT_TEMPERATURE
-        )
-        self.max_retries = max_retries if max_retries is not None else self.DEFAULT_MAX_RETRIES
-        self.max_input_tokens = max_input_tokens or self.DEFAULT_MAX_INPUT_TOKENS
+        # Load persisted session if available
+        self.session = self._load_session_from_file()
+        if not self.session:
+            self.session = self.create_session()
 
-        self._client: Anthropic | AnthropicVertex | None = None
+    @property
+    def session_file(self) -> Path:
+        """Get the session file path."""
+        return self.workspace_dir / SESSION_FILE
 
-    def _get_client(self) -> Anthropic | AnthropicVertex:
-        """Get or create the Anthropic client.
+    @property
+    def effective_system_prompt(self) -> str:
+        """Get the effective system prompt."""
+        if self._system_prompt_override:
+            return self._system_prompt_override
+        return self.config.resolved_system_prompt
+
+    def _load_session_from_file(self) -> ClaudeSession | None:
+        """Load session from file if it exists.
 
         Returns:
-            Configured Anthropic or AnthropicVertex client.
+            ClaudeSession or None if no persisted session.
         """
-        if self._client is None:
-            if self.use_vertex:
-                self._client = AnthropicVertex(
-                    project_id=self.project_id,
-                    region=self.region,
-                )
-            else:
-                self._client = Anthropic(api_key=self.api_key)
-        return self._client
+        if not self.session_file.exists():
+            return None
 
-    async def summarize(self, items: list[ContextItem]) -> str:
-        """Generate a summary from context items.
+        try:
+            data = json.loads(self.session_file.read_text())
+            session = ClaudeSession.from_dict(data)
+            # Also add to in-memory store
+            ClaudeClient._session_store[session.session_id] = session
+            logger.info(f"Loaded session from file: {session.session_id}")
+            return session
+        except Exception as e:
+            logger.warning(f"Failed to load session from file: {e}")
+            return None
+
+    def _save_session_to_file(self, session: ClaudeSession) -> None:
+        """Save session to file for persistence.
 
         Args:
-            items: List of context items to summarize.
+            session: Session to save.
+        """
+        try:
+            self.session_file.write_text(json.dumps(session.to_dict(), indent=2))
+            logger.debug(f"Saved session to file: {session.session_id}")
+        except Exception as e:
+            logger.error(f"Failed to save session to file: {e}")
+
+    def _get_mcp_servers_config(self, resources: list[str] | None = None) -> dict[str, Any]:
+        """Get MCP servers configuration for specified resources.
+
+        Args:
+            resources: List of resource names (gmail, slack, jira, github).
+                      If None, returns all configured sources.
 
         Returns:
-            AI-generated summary string.
-
-        Raises:
-            Exception: If summarization fails after retries.
+            Dictionary of MCP server configurations with environment variables resolved.
         """
-        if not items:
-            return NO_ITEMS_SUMMARY
+        # Load raw MCP config from JSON
+        raw_mcp_config = get_mcp_servers_config()
 
-        prompt = self._build_prompt(items)
+        if not raw_mcp_config:
+            logger.debug("No MCP servers configured")
+            return {}
 
-        # Execute with retry logic
-        return await self._execute_with_retry(prompt)
+        # Determine which sources to include
+        enabled_sources = {source.value for source in self.config.enabled_sources}
+        if resources:
+            target_sources = enabled_sources.intersection(set(resources))
+        else:
+            target_sources = enabled_sources
+
+        # Build resolved configuration using McpServerConfig
+        resolved_config = {}
+        for server_name in target_sources:
+            if server_name not in raw_mcp_config:
+                logger.debug(f"MCP config not found for server: {server_name}")
+                continue
+
+            try:
+                # Create McpServerConfig directly from JSON - field validator will resolve env vars
+                raw_config = raw_mcp_config[server_name]
+                server_config = McpServerConfig(**raw_config)
+                # Convert back to dict for Claude SDK
+                resolved_config[server_name] = server_config.model_dump()
+            except Exception as e:
+                logger.warning(f"Failed to configure MCP server {server_name}: {e}")
+
+        logger.debug(f"Resolved MCP config for {len(resolved_config)} servers: {list(resolved_config.keys())}")
+        return resolved_config
+
+    def create_session(self) -> ClaudeSession:
+        """Create a new Claude session.
+
+        Returns:
+            ClaudeSession object with session ID.
+        """
+        # Generate session ID
+        session_id = f"session-{uuid.uuid4().hex[:12]}"
+
+        # Create session object
+        session = ClaudeSession(
+            session_id=session_id,
+            created_at=datetime.now(),
+            last_used=datetime.now(),
+            resources=[source.value for source in self.config.enabled_sources],
+            metadata={"output_format": self.config.output_format},
+        )
+
+        # Store session in memory and file
+        ClaudeClient._session_store[session_id] = session
+        self._save_session_to_file(session)
+
+        logger.info(f"Created Claude session: {session_id}")
+        return session
 
     async def execute_prompt(
         self,
         prompt: str,
-        context: dict[str, Any],
+        context: dict[str, Any] | None = None,
         system_prompt: str | None = None,
     ) -> str:
-        """Execute a custom prompt with provided context.
+        """Execute a prompt with optional context.
+
+        Uses the simpler query() function for stateless execution with session resumption.
+        This is ideal for daemon/background use cases.
 
         Args:
-            prompt: The user's custom prompt/instruction.
-            context: Dictionary of context data.
-            system_prompt: Optional custom system prompt. If None, uses default.
+            prompt: The user's prompt/instruction.
+            context: Optional dictionary of context data.
+            system_prompt: Optional system prompt override.
 
         Returns:
             AI-generated response string.
-
-        Raises:
-            Exception: If execution fails after retries.
         """
-        # Build full prompt with context
-        context_json = json.dumps(context, indent=2, default=str)
-        full_prompt = f"{prompt}\n\nContext:\n{context_json}"
+        # Build full prompt with context if provided
+        if context:
+            context_json = json.dumps(context, indent=2, default=str)
+            full_prompt = f"{prompt}\n\nContext:\n{context_json}"
+        else:
+            full_prompt = prompt
 
-        return await self._execute_with_retry(full_prompt, system_prompt=system_prompt)
+        # Build options
+        effective_system_prompt = system_prompt or self.effective_system_prompt
+
+        # Get MCP servers config (may be empty if not configured)
+        mcp_servers = self._get_mcp_servers_config()
+
+        options = ClaudeAgentOptions(
+            system_prompt=effective_system_prompt,
+            permission_mode=self.config.permission_mode,
+            resume=self.session.session_id if self.session else None,
+            mcp_servers=mcp_servers if mcp_servers else None,
+        )
+
+        # Execute query
+        response_text = ""
+        new_session_id = None
+
+        try:
+            async for message in query(prompt=full_prompt, options=options):
+                # Capture session ID from any message that has it
+                if hasattr(message, "session_id") and message.session_id:
+                    new_session_id = message.session_id
+
+                # Extract text content from assistant messages
+                if isinstance(message, AssistantMessage) and message.content:
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            response_text += block.text
+
+            # Update session with new session ID if provided
+            if new_session_id and self.session:
+                if new_session_id != self.session.session_id:
+                    # Session ID changed, update
+                    self.session.session_id = new_session_id
+                self.session.last_used = datetime.now()
+                self.session.turns += 1
+                ClaudeClient._session_store[self.session.session_id] = self.session
+                self._save_session_to_file(self.session)
+
+        except Exception as e:
+            logger.error(f"Error executing prompt: {e}", exc_info=True)
+            raise
+
+        return response_text
+
+    def clear_session(self) -> None:
+        """Clear the current session."""
+        if self.session:
+            # Remove from memory store
+            if self.session.session_id in ClaudeClient._session_store:
+                del ClaudeClient._session_store[self.session.session_id]
+
+            # Remove persisted file
+            if self.session_file.exists():
+                self.session_file.unlink()
+
+            logger.info(f"Cleared session: {self.session.session_id}")
+            self.session = None
+
+    def list_sessions(self) -> list[ClaudeSession]:
+        """List all active sessions.
+
+        Returns:
+            List of ClaudeSession objects.
+        """
+        return list(ClaudeClient._session_store.values())
+
+    def get_latest_session(self) -> ClaudeSession | None:
+        """Get the most recently used session.
+
+        Returns:
+            ClaudeSession object or None if no sessions exist.
+        """
+        if not ClaudeClient._session_store:
+            return None
+
+        return max(ClaudeClient._session_store.values(), key=lambda s: s.last_used)
+
+    @classmethod
+    def get_session_count(cls) -> int:
+        """Get total number of sessions in the store.
+
+        Returns:
+            Number of sessions currently stored.
+        """
+        return len(cls._session_store)
+
+    @classmethod
+    def get_session_by_id(cls, session_id: str) -> ClaudeSession | None:
+        """Get a session by ID from the static store.
+
+        Args:
+            session_id: Session ID to retrieve.
+
+        Returns:
+            ClaudeSession object or None if not found.
+        """
+        return cls._session_store.get(session_id)
+
+    @classmethod
+    def clear_all_sessions(cls) -> None:
+        """Clear all sessions from the static store.
+
+        WARNING: This removes all sessions for all ClaudeClient instances.
+        """
+        count = len(cls._session_store)
+        cls._session_store.clear()
+        logger.info(f"Cleared all {count} sessions from static store")
+
+    @classmethod
+    def get_session_ids(cls) -> list[str]:
+        """Get all session IDs from the static store.
+
+        Returns:
+            List of session IDs.
+        """
+        return list(cls._session_store.keys())
 
     async def test_connection(self) -> bool:
-        """Test connection to Claude API.
+        """Test connection to Claude Agent SDK.
 
         Returns:
             True if connection is successful, False otherwise.
         """
         try:
-            # Simple test prompt
-            await self._execute_with_retry("Respond with 'OK' if you can read this.")
-            return True
-        except Exception:
+            response = await self.execute_prompt("Respond with 'OK'")
+            return "OK" in response
+        except Exception as e:
+            logger.error(f"Connection test failed: {e}")
             return False
-
-    async def _execute_with_retry(
-        self,
-        prompt: str,
-        system_prompt: str | None = None,
-    ) -> str:
-        """Execute prompt with retry logic and exponential backoff.
-
-        Args:
-            prompt: The prompt to execute.
-            system_prompt: Optional custom system prompt. If None, uses default.
-
-        Returns:
-            Generated response string.
-
-        Raises:
-            Exception: If all retries fail.
-        """
-        last_error: Exception | None = None
-
-        for attempt in range(self.max_retries):
-            try:
-                return await self._generate_content(prompt, system_prompt=system_prompt)
-            except Exception as e:
-                last_error = e
-                if attempt < self.max_retries - 1:
-                    # Exponential backoff: 1s, 2s, 4s
-                    await asyncio.sleep(2**attempt)
-
-        if last_error:
-            raise last_error
-        raise RuntimeError("Request failed with unknown error")
-
-    async def _generate_content(
-        self,
-        prompt: str,
-        system_prompt: str | None = None,
-    ) -> str:
-        """Generate content using Claude API.
-
-        Args:
-            prompt: The prompt to send.
-            system_prompt: Optional custom system prompt. If None, uses default.
-
-        Returns:
-            Generated content string.
-        """
-        client = self._get_client()
-        effective_system_prompt = system_prompt if system_prompt is not None else get_system_prompt()
-
-        # Run in thread pool since Anthropic SDK is sync
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                system=effective_system_prompt,
-                messages=[{"role": "user", "content": prompt}],
-            ),
-        )
-
-        # Extract text from response
-        if response.content and len(response.content) > 0:
-            return response.content[0].text
-        return ""
-
-    def _build_prompt(self, items: list[ContextItem]) -> str:
-        """Build the prompt from context items.
-
-        Args:
-            items: Context items to include in prompt.
-
-        Returns:
-            Formatted prompt string.
-        """
-        # Sort by relevance score (highest first)
-        sorted_items = sorted(items, key=lambda x: x.relevance_score, reverse=True)
-
-        # Build context text with token budget awareness
-        context_parts: list[str] = []
-        estimated_tokens = 0
-
-        for item in sorted_items:
-            item_text = self._format_item(item)
-            # Rough token estimate: ~4 chars per token
-            item_tokens = len(item_text) // 4
-
-            if estimated_tokens + item_tokens > self.max_input_tokens:
-                break
-
-            context_parts.append(item_text)
-            estimated_tokens += item_tokens
-
-        context_text = "\n\n".join(context_parts)
-        return build_summarization_prompt(context_text)

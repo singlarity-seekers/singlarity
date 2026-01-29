@@ -10,12 +10,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from devassist.ai.agent_client import AgentClient
 from devassist.ai.base_client import BaseAIClient
+from devassist.ai.claude_client import ClaudeClient
 from devassist.ai.prompts import get_runner_system_prompt
 from devassist.core.aggregator import ContextAggregator
 from devassist.models.context import ContextItem
-from devassist.models.mcp_config import MCPConfig
+from devassist.models.runner_config import MCPConfig
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ class Runner:
         self,
         config: MCPConfig,
         workspace_dir: Path | str | None = None,
-        ai_client: BaseAIClient | AgentClient | None = None,
+        ai_client: BaseAIClient | ClaudeClient | None = None,
         aggregator: ContextAggregator | None = None,
     ) -> None:
         """Initialize Runner.
@@ -43,7 +43,7 @@ class Runner:
         Args:
             config: MCP configuration.
             workspace_dir: Path to workspace directory.
-            ai_client: AI client for prompt execution (BaseAIClient or AgentClient).
+            ai_client: AI client for prompt execution (BaseAIClient or ClaudeClient).
             aggregator: Context aggregator for fetching items.
         """
         if workspace_dir is None:
@@ -62,8 +62,8 @@ class Runner:
         self.running = False
         self.last_run: datetime | None = None
 
-        # Check if using AgentClient (has session management)
-        self.use_agent_sdk = isinstance(ai_client, AgentClient)
+        # Check if using ClaudeClient (has session management)
+        self.use_claude_sdk = isinstance(ai_client, ClaudeClient)
 
         # Ensure output directory exists
         self.output_destination.parent.mkdir(parents=True, exist_ok=True)
@@ -96,8 +96,8 @@ class Runner:
                 logger.warning("No AI client configured")
                 return None
 
-            if self.use_agent_sdk:
-                # AgentClient handles session/history automatically
+            if self.use_claude_sdk:
+                # ClaudeClient handles session/history automatically
                 result = await self.ai_client.execute_prompt(
                     self.prompt,
                     context,

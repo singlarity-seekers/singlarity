@@ -14,11 +14,11 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from devassist.ai.agent_client import AgentClient
+from devassist.ai.claude_client import ClaudeClient
 from devassist.ai.prompts import get_runner_system_prompt
 from devassist.core.config_manager import ConfigManager
 from devassist.core.runner_manager import RunnerManager
-from devassist.models.mcp_config import MCPConfig
+from devassist.models.runner_config import MCPConfig
 
 # Create router for AI commands
 app = typer.Typer(
@@ -98,13 +98,13 @@ def get_ai_client(config: MCPConfig):
         )
 
 
-def get_agent_client() -> AgentClient:
-    """Create an AgentClient with session management.
+def get_claude_client() -> ClaudeClient:
+    """Create a ClaudeClient with session management.
 
     Returns:
-        Configured AgentClient.
+        Configured ClaudeClient.
     """
-    return AgentClient(
+    return ClaudeClient(
         system_prompt=get_runner_system_prompt(),
     )
 
@@ -150,7 +150,7 @@ def run_background_runner() -> None:
         config.runner.prompt = prompt
 
     # Create AgentClient with session management
-    ai_client = get_agent_client()
+    ai_client = get_claude_client()
 
     # Create aggregator
     aggregator = ContextAggregator()
@@ -230,7 +230,7 @@ def run_runner(
         from devassist.core.aggregator import ContextAggregator
         from devassist.core.runner import Runner
 
-        ai_client = get_agent_client()
+        ai_client = get_claude_client()
         aggregator = ContextAggregator()
         runner = Runner(
             config=config,
@@ -307,8 +307,8 @@ def show_status() -> None:
     status = runner_manager.get_status()
 
     # Check session status
-    agent_client = get_agent_client()
-    has_session = agent_client.session_id is not None
+    claude_client = get_claude_client()
+    has_session = claude_client.session is not None
 
     # Build status table
     table = Table(show_header=False, box=None)
@@ -325,7 +325,7 @@ def show_status() -> None:
         table.add_row("AI Provider", "Claude Agent SDK")
 
         if has_session:
-            table.add_row("Session", f"[green]Active[/green] ({agent_client.session_id[:8]}...)")
+            table.add_row("Session", f"[green]Active[/green] ({claude_client.session.session_id[:8]}...)")
         else:
             table.add_row("Session", "[dim]None (will create on first run)[/dim]")
 
@@ -400,11 +400,11 @@ def clear_session() -> None:
     This resets the conversation history so the next run starts fresh.
     Use this at the start of a new day or when you want a clean slate.
     """
-    agent_client = get_agent_client()
+    claude_client = get_claude_client()
 
     # Check if there's a session to clear
-    if agent_client.session_id:
-        agent_client.clear_session()
+    if claude_client.session:
+        claude_client.clear_session()
         console.print("[green]Session cleared successfully.[/green]")
         console.print("The next run will start a fresh conversation.")
     else:

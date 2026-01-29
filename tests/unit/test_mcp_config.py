@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from devassist.models.mcp_config import (
+from devassist.models.runner_config import (
     AIProviderConfig,
     ClaudeConfig,
     MCPConfig,
@@ -24,7 +24,7 @@ class TestClaudeConfig:
         """Should have sensible defaults."""
         config = ClaudeConfig()
         assert config.api_key is None
-        assert config.model == "claude-sonnet-4-5-20250929"
+        assert config.model == "claude-sonnet-4-5@20250929"
         assert config.max_tokens == 4096
         assert config.temperature == 0.7
 

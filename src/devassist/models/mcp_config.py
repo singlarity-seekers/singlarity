@@ -1,122 +1,76 @@
-"""MCP configuration models for DevAssist.
+"""MCP Server configuration models for DevAssist."""
 
-Defines the structure for .mcp.json configuration file with support for:
-- MCP server definitions
-- AI provider configuration (Claude, Vertex AI)
-- Background runner settings
-- Context source configurations
-"""
-
+import logging
 import os
-import re
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-
-class ClaudeConfig(BaseModel):
-    """Configuration for Anthropic Claude API."""
-
-    api_key: str | None = None
-    model: str = "claude-sonnet-4-5@20250929"
-    max_tokens: int = 4096
-    temperature: float = 0.7
+logger = logging.getLogger(__name__)
 
 
-class VertexConfig(BaseModel):
-    """Configuration for Google Vertex AI."""
+class McpServerConfig(BaseModel):
+    """MCP Server configuration with environment variable resolution."""
 
-    api_key: str | None = None
-    project_id: str = ""
-    location: str = "us-central1"
-    model: str = "gemini-2.5-flash"
+    type: str = Field(default="stdio", description="MCP server type")
+    command: str = Field(..., description="Command to run the MCP server")
+    args: list[str] = Field(default_factory=list, description="Command arguments")
+    description: str = Field(default="", description="Server description")
+    env: dict[str, str] = Field(default_factory=dict, description="Environment variables")
 
+    @field_validator("env", mode="before")
+    @classmethod
+    def resolve_env_variables(cls, v: dict[str, str]) -> dict[str, str]:
+        """Resolve environment variables for empty values.
 
-class AIProviderConfig(BaseModel):
-    """AI provider configuration supporting multiple providers."""
+        If a value is empty, fetch it from os.environ using the key name.
+        Supports default values for specific variables.
 
-    provider: Literal["claude", "vertex"] = "claude"
-    claude: ClaudeConfig = Field(default_factory=ClaudeConfig)
-    vertex: VertexConfig = Field(default_factory=VertexConfig)
+        Args:
+            v: Dictionary of environment variables
 
+        Returns:
+            Dictionary with resolved environment variables
+        """
+        if not isinstance(v, dict):
+            return v
 
-class RunnerConfig(BaseModel):
-    """Background runner configuration."""
+        # Default values for common environment variables
+        defaults = {
+            "CONFLUENCE_URL": "https://issues.redhat.com",
+            "JIRA_SSL_VERIFY": "false",
+            "CONFLUENCE_SSL_VERIFY": "false",
+            "JIRA_URL": "https://issues.redhat.com"
+        }
 
-    enabled: bool = False
-    interval_minutes: int = 5
-    prompt: str = "Review my context and summarize urgent items."
-    last_run: str | None = None
-    status: Literal["stopped", "running", "error"] = "stopped"
-    last_error: str | None = None
-    output_destination: str = "~/.devassist/runner-output.md"
-    notify_on_completion: bool = False
-    sources: list[str] = Field(default_factory=list)
+        resolved_env = {}
+        for key, value in v.items():
+            if not value:  # Empty string or None
+                # Try to get value from environment
+                env_value = os.getenv(key)
+                if env_value:
+                    resolved_env[key] = env_value
+                    logger.debug(f"Resolved {key} from environment: ✓")
+                else:
+                    # Use default if available
+                    default_value = defaults.get(key, "")
+                    resolved_env[key] = default_value
+                    logger.debug(f"Resolved {key} to default: {'✓' if default_value else '✗'}")
+                if not resolved_env[key]:
+                    raise RuntimeError(f"Required environment variable {key} is missing")
+            elif value.startswith("${") and value.endswith("}"):
+                # Handle placeholder syntax like ${JIRA_URL}
+                env_var_name = value[2:-1]  # Remove ${ and }
+                env_value = os.getenv(env_var_name)
+                if env_value:
+                    resolved_env[key] = env_value
+                    logger.debug(f"Resolved {key} from placeholder ${env_var_name}: ✓")
+                else:
+                    # Use default if available for the env var name
+                    default_value = defaults.get(env_var_name, "")
+                    resolved_env[key] = default_value
+                    logger.debug(f"Resolved {key} placeholder ${env_var_name} to default: {'✓' if default_value else '✗'}")
+            else:
+                resolved_env[key] = value
 
-
-class MCPServerConfig(BaseModel):
-    """MCP server configuration."""
-
-    command: str
-    args: list[str] = Field(default_factory=list)
-    env: dict[str, str] = Field(default_factory=dict)
-
-
-class PreferencesConfig(BaseModel):
-    """User preference configuration (for backward compatibility)."""
-
-    priority_keywords: list[str] = Field(
-        default_factory=list, description="Keywords to prioritize"
-    )
-
-
-class MCPConfig(BaseModel):
-    """Main MCP configuration model.
-
-    Represents the complete .mcp.json configuration file structure.
-    """
-
-    version: str = "1.0"
-    mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
-    ai: AIProviderConfig = Field(default_factory=AIProviderConfig)
-    runner: RunnerConfig = Field(default_factory=RunnerConfig)
-    sources: dict[str, dict[str, Any]] = Field(default_factory=dict)
-    preferences: PreferencesConfig = Field(default_factory=PreferencesConfig)
-
-
-def expand_env_vars(data: Any) -> Any:
-    """Recursively expand ${VAR} environment variable references.
-
-    Supports expansion in:
-    - String values: "prefix_${VAR}_suffix" → "prefix_value_suffix"
-    - Nested dictionaries
-    - Lists
-
-    Undefined variables are replaced with empty string.
-
-    Args:
-        data: Configuration data (dict, list, str, or primitive type).
-
-    Returns:
-        Data with environment variables expanded.
-
-    Examples:
-        >>> os.environ["API_KEY"] = "secret"
-        >>> expand_env_vars({"key": "${API_KEY}"})
-        {'key': 'secret'}
-        >>> expand_env_vars({"nested": {"key": "${API_KEY}"}})
-        {'nested': {'key': 'secret'}}
-    """
-    if isinstance(data, dict):
-        return {key: expand_env_vars(value) for key, value in data.items()}
-    elif isinstance(data, list):
-        return [expand_env_vars(item) for item in data]
-    elif isinstance(data, str):
-        # Replace ${VAR} with os.environ.get('VAR', '')
-        return re.sub(
-            r"\$\{(\w+)\}",
-            lambda match: os.environ.get(match.group(1), ""),
-            data,
-        )
-    else:
-        return data
+        return resolved_env

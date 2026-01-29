@@ -49,7 +49,7 @@ class BriefGenerator:
 
         # Initialize AI client with config
         # Support both MCPConfig (new) and AppConfig (legacy)
-        from devassist.models.mcp_config import MCPConfig
+        from devassist.models.runner_config import MCPConfig
 
         if isinstance(config, MCPConfig):
             # New MCPConfig format
