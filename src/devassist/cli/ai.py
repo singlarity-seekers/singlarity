@@ -47,6 +47,7 @@ def run_background_runner() -> None:
     interval_minutes = int(os.environ.get("DEVASSIST_RUNNER_INTERVAL", "5"))
     custom_prompt = os.environ.get("DEVASSIST_RUNNER_PROMPT")
     session_id = os.environ.get("DEVASSIST_RUNNER_SESSION_ID")
+    enable_slack = os.environ.get("DEVASSIST_RUNNER_ENABLE_SLACK", "true").lower() == "true"
 
     # Create configuration and runner
     config = ClientConfig()
@@ -55,6 +56,7 @@ def run_background_runner() -> None:
         interval_minutes=interval_minutes,
         custom_prompt=custom_prompt,
         session_id=session_id,
+        enable_slack=enable_slack,
     )
 
     # Run the background runner
@@ -150,6 +152,8 @@ def run(
         help="Session ID to continue conversation",
     ),
     foreground: bool = typer.Option(False, "--foreground", "-f", help="Run in foreground"),
+    enable_slack: bool = typer.Option(False, "--enable-slack", help="Enable Slack notifications"),
+    slack_name: str = typer.Option(None, "--slack-name", help="Slack user name for notifications"),
 ) -> None:
     """Start the background AI runner."""
     runner_manager = RunnerManager()

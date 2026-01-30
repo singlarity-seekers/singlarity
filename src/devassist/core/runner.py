@@ -160,9 +160,9 @@ class Runner:
                 # Send Slack notification if enabled
                 if self.enable_slack and self.slack_client:
                     try:
-                        await self.slack_client.send_direct_message(
-                            user_id="U0ABNAZCQG3",
-                            text=response
+                        await self.slack_client.send_devassist_notification(
+                            title="Devassist Action Summary",
+                            content=response
                         )
                         logger.debug("Slack notification sent successfully")
                     except Exception as slack_error:

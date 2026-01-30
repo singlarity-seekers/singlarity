@@ -125,6 +125,8 @@ When applicable, organize responses using:
 - Operate under least-privilege access at all times
 
 ---
+## Output Format
+The response should be in markdown format that is Slack compatible
 
 ## Guiding Principle
 

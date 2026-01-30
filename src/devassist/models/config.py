@@ -341,6 +341,7 @@ class ClientConfig(BaseModel):
         timeout: int | None = None,
         system_prompt: str | None = None,
         workspace_dir: str | None = None,
+        slack_name: str | None = None,
         **kwargs
     ) -> "ClientConfig":
         """Create ClientConfig from CLI arguments.
@@ -354,6 +355,7 @@ class ClientConfig(BaseModel):
             timeout: AI timeout in seconds
             system_prompt: Custom system prompt (file or string)
             workspace_dir: Custom workspace directory
+            slack_name: Slack user name for notifications
             **kwargs: Additional config overrides
 
         Returns:
@@ -393,6 +395,8 @@ class ClientConfig(BaseModel):
             base_config["system_prompt"] = system_prompt
         if workspace_dir is not None:
             base_config["workspace_dir"] = workspace_dir
+        if slack_name is not None:
+            base_config["slack_name"] = slack_name
 
         # Apply any additional kwargs
         base_config.update(kwargs)
@@ -472,6 +476,7 @@ class ClientConfig(BaseModel):
             - DEVASSIST_WORKSPACE_DIR
             - DEVASSIST_OUTPUT_FORMAT
             - DEVASSIST_SOURCES
+            - DEVASSIST_SLACK_NAME
 
         Args:
             config_data: Config dictionary to modify in-place
@@ -492,6 +497,8 @@ class ClientConfig(BaseModel):
             config_data["output_format"] = output_fmt
         if sources := os.environ.get(f"{env_prefix}SOURCES"):
             config_data["sources"] = sources
+        if slack_name := os.environ.get(f"{env_prefix}SLACK_NAME"):
+            config_data["slack_name"] = slack_name
 
     @classmethod
     def from_legacy_config(cls, legacy_config: Any) -> "ClientConfig":

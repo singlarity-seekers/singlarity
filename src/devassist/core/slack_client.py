@@ -111,6 +111,7 @@ class SlackClient:
         Args:
             content: The main notification content
             title: Notification title
+            user_id: Id of the user you want to sent the message to
 
         Returns:
             Slack API response
@@ -147,8 +148,30 @@ class SlackClient:
 
         # Fallback text for notifications
         fallback_text = f"{title}: {content[:100]}..." if len(content) > 100 else content
+        if self.user_token:
+            logger.info("Sending message to self")
+            return await self.send_to_self(fallback_text, blocks)
+        else:
+            user_id = os.getenv("SLACK_USER_ID")
+            if not user_id:
+                raise RuntimeError("Please set 'SLACK_USER_ID' environment variable")
+            return await self.send_direct_message(user_id=user_id, text=fallback_text, blocks=blocks)
 
-        return await self.send_to_self(fallback_text, blocks)
+
+    def get_user_id_by_name(self, user_name: str):
+        try:
+            # Call the users.list API method
+            response = self._get_client().users_list()
+            if response["ok"]:
+                users = response["members"]
+                for user in users:
+                    # Check display name or real name
+                    if user.get("profile", {}).get("display_name") == user_name or user.get("real_name") == user_name:
+                        return user["id"]
+            return None
+        except Exception as e:
+            print(f"Error: {e}")
+            return None
 
     def get_user_id(self) -> str:
         """Get current user's Slack ID.
