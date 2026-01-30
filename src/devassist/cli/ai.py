@@ -229,6 +229,7 @@ def kill(
     except Exception as e:
         console.print(f"[red]✗ Error stopping runner:[/red] {str(e)}")
         raise typer.Exit(1)
+    clear_sessions()
 
 
 @app.command("logs")
@@ -304,7 +305,71 @@ def clear_sessions() -> None:
         return
 
     ClaudeClient.clear_all_sessions()
-    console.print(f"[green]✓[/green] Cleared {count} sessions")
+
+    # Also delete the runner session file
+    try:
+        config = ClientConfig()
+        session_file = config.workspace_dir / "runner-session.txt"
+        if session_file.exists():
+            session_file.unlink()
+            console.print(f"[green]✓[/green] Cleared {count} sessions and runner session file")
+        else:
+            console.print(f"[green]✓[/green] Cleared {count} sessions")
+    except Exception as e:
+        console.print(f"[green]✓[/green] Cleared {count} sessions")
+        console.print(f"[yellow]Warning:[/yellow] Failed to delete runner session file: {e}")
+
+
+@app.command("prompt")
+async def add_prompt_to_session(
+        prompt: str = typer.Option(
+            None,
+            "--prompt",
+            "-p",
+            help="Add custom instruction to your AI runner session",
+        ),
+) -> None:
+    """Send a prompt to Claude using the latest session."""
+    import asyncio
+
+    if not prompt:
+        console.print("[red]Error:[/red] Please provide a prompt using --prompt or -p")
+        raise typer.Exit(1)
+
+    # First try to get the runner's session ID
+    runner_manager = RunnerManager()
+    runner_session_id = runner_manager.get_runner_session_id()
+
+    if runner_session_id:
+        session_id = runner_session_id
+        console.print(f"[blue]Using runner session: {session_id}[/blue]")
+        try:
+            # Create configuration and Claude client
+            config = ClientConfig()
+            claude_client = ClaudeClient(config=config)
+
+            console.print(f"[blue]Sending prompt to Claude...[/blue]")
+            console.print(f"[dim]Prompt: {prompt}[/dim]")
+
+            # Make async call to Claude
+            async def make_call():
+                return await claude_client.make_call(
+                    user_prompt=prompt,
+                    session_id=session_id
+                )
+
+            response = asyncio.run(make_call())
+
+            # Display response
+            console.print("\n[green]Claude Response:[/green]")
+            console.print(response)
+
+        except Exception as e:
+            console.print(f"[red]Error:[/red] Failed to send prompt to Claude: {str(e)}")
+            raise typer.Exit(1)
+    else:
+        console.print("[yellow]No running session found[/yellow]")
+        session_id = None
 
 
 @app.command("output")

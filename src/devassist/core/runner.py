@@ -82,6 +82,9 @@ class Runner:
             # Use the session created by claude_client
             self.session_id = self.claude_client.session.session_id
 
+        # Save session ID for CLI access
+        self._save_session_id()
+
         # Ensure output directory exists
         self.output_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -95,6 +98,15 @@ class Runner:
         """Handle shutdown signals."""
         logger.info(f"Received signal {signum}, stopping runner...")
         self._stop_requested = True
+
+    def _save_session_id(self) -> None:
+        """Save the current session ID to a file for CLI access."""
+        try:
+            session_file = self.config.workspace_dir / "runner-session.txt"
+            session_file.write_text(self.session_id)
+            logger.debug(f"Saved runner session ID to {session_file}")
+        except Exception as e:
+            logger.warning(f"Failed to save session ID: {e}")
 
     async def run(self) -> None:
         """Run the background runner loop.

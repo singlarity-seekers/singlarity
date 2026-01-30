@@ -104,6 +104,24 @@ class RunnerManager:
             return None
         return read_pid_file(self.pid_file)
 
+    def get_runner_session_id(self) -> str | None:
+        """Get the session ID of the currently running runner.
+
+        Returns:
+            Session ID if runner is running and has a session, None otherwise.
+        """
+        if not self.is_running():
+            return None
+
+        session_file = self.workspace_dir / "runner-session.txt"
+        try:
+            if session_file.exists():
+                return session_file.read_text().strip()
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to read runner session ID: {e}")
+            return None
+
     def start(
         self,
         interval: int | None = None,
