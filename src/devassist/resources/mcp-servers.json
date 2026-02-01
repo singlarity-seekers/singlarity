@@ -1,7 +1,7 @@
 {
   "jira": {
     "type": "stdio",
-    "command": "docker",
+    "command": "podman",
     "args": [
       "run",
       "-i",
@@ -26,7 +26,7 @@
   },
   "github": {
     "type": "stdio",
-    "command": "docker",
+    "command": "podman",
     "args": [
       "run",
       "-i",

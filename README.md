@@ -49,6 +49,27 @@ source .venv/bin/activate  # Linux/macOS
 pip install -e ".[dev]"
 ```
 
+### Container Engine Setup
+
+DevAssist uses MCP servers that run in containers. The configuration defaults to using Docker, but **Podman is fully supported** as a drop-in replacement.
+
+#### For Podman Users (Without Docker)
+
+If you have Podman installed but not Docker, create a symlink to allow MCP servers to work seamlessly:
+
+```bash
+# Verify podman is installed
+which podman
+
+# Create symlink (requires sudo)
+sudo ln -s $(which podman) /usr/local/bin/docker
+
+# Verify the symlink
+docker --version  # Should show Podman version
+```
+
+**Alternative:** If you prefer not to create a symlink, you can modify the MCP server configuration at `src/devassist/resources/mcp-servers.json` to use `podman` instead of `docker` for the `command` field.
+
 ## ⚡ Quick Start
 
 ### 1. Basic Setup
