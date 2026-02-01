@@ -1,13 +1,16 @@
 """AI CLI commands for DevAssist.
 
 Provides commands for managing the background AI runner using Claude Agent SDK.
+Updated to use the working execution approach that provides rich JIRA responses.
 """
 
+import asyncio
 import os
 import typer
 from rich.console import Console
 from rich.table import Table
 from datetime import datetime
+from typing import Optional
 
 from devassist.ai.claude_client import ClaudeClient
 from devassist.core.runner import Runner
@@ -28,18 +31,18 @@ def run_background_runner() -> None:
     """Entry point for background runner process.
 
     This function is called in a separate process and runs the runner loop.
-    Reads CLI options from environment variables.
+    Uses direct execution approach (same as working runner.py main()) instead of subprocess.
     """
     import asyncio
     import logging
 
-    # Setup logging for background process
+    # Setup logging for background process - USE DEBUG LEVEL (key to working approach!)
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,  # DEBUG is critical for Claude SDK communication!
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=[
             logging.FileHandler(ClientConfig().workspace_dir / "logs" / "runner.log"),
-            logging.StreamHandler(),
+            # No StreamHandler to prevent duplication in subprocess
         ]
     )
 
@@ -49,18 +52,54 @@ def run_background_runner() -> None:
     session_id = os.environ.get("DEVASSIST_RUNNER_SESSION_ID")
     enable_slack = os.environ.get("DEVASSIST_RUNNER_ENABLE_SLACK", "true").lower() == "true"
 
-    # Create configuration and runner
+    # ✅ If no session_id from env, try to read from file (session continuity)
+    if not session_id:
+        try:
+            config = ClientConfig()
+            session_file = config.workspace_dir / "runner-session.txt"
+            if session_file.exists():
+                session_id = session_file.read_text().strip()
+                logger = logging.getLogger(__name__)
+                logger.info(f"Found existing session in file: {session_id}")
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to read session from file: {e}")
+
+    # Use exact same pattern as working runner.py main()
     config = ClientConfig()
+
+    # Use EXACT same initialization as working direct test
     runner = Runner(
         config=config,
         interval_minutes=interval_minutes,
         custom_prompt=custom_prompt,
-        session_id=session_id,
+        output_file=config.workspace_dir / "runner-output.md", # Explicit output file like working test
         enable_slack=enable_slack,
+        session_id = session_id
     )
 
-    # Run the background runner
-    asyncio.run(runner.run())
+    # Use EXACT same execution pattern as working runner.py main()
+    async def run_direct():
+        execution_count = 0
+        logger = logging.getLogger(__name__)
+        # Use same stop checking pattern as working runner.py
+        while not runner._stop_requested:
+            execution_count += 1
+            logger.info(f"Starting execution #{execution_count}")
+
+            try:
+                await runner._execute_prompt()
+                logger.info(f"Execution #{execution_count} completed successfully")
+            except Exception as e:
+                logger.error(f"Execution #{execution_count} failed: {e}")
+
+            # Only wait if we're continuing (same pattern as working runner.py)
+            if not runner._stop_requested:
+                wait_seconds = interval_minutes * 60
+                await asyncio.sleep(wait_seconds)
+
+    # Run the direct execution loop
+    asyncio.run(run_direct())
 
 
 @app.command("test")
@@ -74,7 +113,25 @@ def test_connection() -> None:
         console.print("[blue]Testing Claude Agent SDK connection...[/blue]")
         console.print(f"[green]✓[/green] Claude client initialized successfully")
         console.print(f"   • Model: {config.ai_model}")
+        console.print(f"   • Timeout: {config.ai_timeout_seconds}s")
         console.print(f"   • Enabled sources: {[s.value for s in config.enabled_sources]}")
+
+        # Test actual Claude call
+        async def test_call():
+            response = await client.make_call(
+                user_prompt="Test: Please respond with a brief confirmation that you can access my context sources.",
+            )
+            return response
+
+        console.print("[blue]Testing Claude API call...[/blue]")
+        response = asyncio.run(test_call())
+
+        if response and response.strip():
+            console.print(f"[green]✓[/green] Claude API test successful")
+            console.print(f"Response: {response[:100]}...")
+        else:
+            console.print(f"[yellow]⚠[/yellow] Claude API responded but with empty content")
+            console.print("This might indicate MCP server issues or configuration problems")
 
     except Exception as e:
         console.print(f"[red]✗ Connection failed:[/red] {str(e)}")
@@ -129,6 +186,7 @@ def status() -> None:
         config = ClientConfig()
         console.print(f"\n[bold]AI Configuration:[/bold]")
         console.print(f"Model: [cyan]{config.ai_model}[/cyan]")
+        console.print(f"Timeout: [cyan]{config.ai_timeout_seconds}s[/cyan]")
         console.print(f"Enabled sources: {', '.join([s.value for s in config.enabled_sources])}")
 
     except Exception as e:
@@ -139,21 +197,20 @@ def status() -> None:
 @app.command("run")
 def run(
     interval: int = typer.Option(5, "--interval", "-i", help="Run interval in minutes"),
-    prompt: str = typer.Option(
+    prompt: Optional[str] = typer.Option(
         None,
         "--prompt",
         "-p",
         help="Custom prompt for AI runner",
     ),
-    session_id: str = typer.Option(
+    session_id: Optional[str] = typer.Option(
         None,
         "--session-id",
         "-s",
         help="Session ID to continue conversation",
     ),
     foreground: bool = typer.Option(False, "--foreground", "-f", help="Run in foreground"),
-    enable_slack: bool = typer.Option(False, "--enable-slack", help="Enable Slack notifications"),
-    slack_name: str = typer.Option(None, "--slack-name", help="Slack user name for notifications"),
+    enable_slack: bool = typer.Option(True, "--enable-slack/--disable-slack", help="Enable Slack notifications"),
 ) -> None:
     """Start the background AI runner."""
     runner_manager = RunnerManager()
@@ -165,34 +222,77 @@ def run(
         return
 
     if foreground:
-        # Run in foreground
+        # Run in foreground using direct execution (same as working runner.py main())
         console.print(f"[blue]Starting AI runner in foreground (interval: {interval}m, Ctrl+C to stop)[/blue]")
         if session_id:
             console.print(f"[dim]Using session: {session_id}[/dim]")
+        console.print(f"[dim]Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}[/dim]")
+
         try:
-            import asyncio
+            # Setup DEBUG logging for foreground (critical!)
+            import logging
+            logging.basicConfig(
+                level=logging.DEBUG,  # DEBUG is critical!
+                format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                handlers=[logging.StreamHandler()]
+            )
+
+            # Use exact same pattern as working runner.py main()
             config = ClientConfig()
+
+            # Use EXACT same initialization as working direct test
             runner = Runner(
                 config=config,
                 interval_minutes=interval,
                 custom_prompt=prompt,
-                session_id=session_id,
+                output_file=config.workspace_dir / "runner-output.md",  # Explicit output file like working test
+                session_id=session_id,  # ✅ Pass session_id for continuity
+                enable_slack=enable_slack,  # ✅ Pass enable_slack from CLI
             )
-            asyncio.run(runner.run())
+
+            console.print(f"[green]✓[/green] Runner created (Session: {runner.session_id})")
+            console.print("[blue]Running in foreground using direct execution...[/blue]")
+
+            # Use EXACT same execution pattern as working runner.py main()
+            async def run_direct():
+                execution_count = 0
+                # Run indefinitely but with proper stop checking (same as working runner.py)
+                while not runner._stop_requested:
+                    execution_count += 1
+                    console.print(f"\n[blue]🔄 Starting execution #{execution_count}[/blue]")
+
+                    try:
+                        await runner._execute_prompt()
+                        console.print(f"[green]✅ Execution #{execution_count} completed successfully[/green]")
+
+                        # Show output snippet
+                        if runner.output_file.exists():
+                            content = runner.output_file.read_text()[:200]
+                            console.print(f"[dim]📄 Output preview: {content}...[/dim]")
+
+                    except Exception as e:
+                        console.print(f"[red]❌ Execution #{execution_count} failed: {e}[/red]")
+
+                    # Only wait if we're continuing (same pattern as working runner.py)
+                    if not runner._stop_requested:
+                        wait_seconds = interval * 60
+                        console.print(f"[dim]⏳ Waiting {interval} minutes before next execution...[/dim]")
+                        await asyncio.sleep(wait_seconds)
+
+            asyncio.run(run_direct())
         except KeyboardInterrupt:
             console.print("\n[yellow]Runner stopped by user.[/yellow]")
     else:
         # Start as background process
         try:
-            runner_manager.start(interval=interval, prompt=prompt, session_id=session_id)
+            runner_manager.start(interval=interval, prompt=prompt, session_id=session_id, enable_slack=enable_slack)
             status = runner_manager.get_status()
             console.print(f"[green]✓[/green] AI runner started successfully")
             console.print(f"[dim]PID: {status.pid}[/dim]")
             console.print(f"[dim]Interval: {interval} minutes[/dim]")
             if session_id:
                 console.print(f"[dim]Session: {session_id}[/dim]")
-            if prompt:
-                console.print(f"[dim]Custom prompt: {prompt[:50]}{'...' if len(prompt) > 50 else ''}[/dim]")
+            console.print(f"[dim]Prompt: {prompt[:50] + '...' if prompt and len(prompt) > 50 else prompt or 'Default'}[/dim]")
 
             # Show output location
             config = ClientConfig()
@@ -210,6 +310,7 @@ def kill(
 ) -> None:
     """Stop the background runner."""
     runner_manager = RunnerManager()
+    clear_sessions()
 
     if not runner_manager.is_running():
         console.print("[yellow]Runner is not running[/yellow]")
@@ -229,7 +330,6 @@ def kill(
     except Exception as e:
         console.print(f"[red]✗ Error stopping runner:[/red] {str(e)}")
         raise typer.Exit(1)
-    clear_sessions()
 
 
 @app.command("logs")
@@ -299,8 +399,10 @@ def list_sessions() -> None:
 def clear_sessions() -> None:
     """Clear all Claude AI sessions."""
     count = ClaudeClient.get_session_count()
+    runner_manager = RunnerManager()
+    runner_session = runner_manager.get_runner_session_id()
 
-    if count == 0:
+    if count == 0 and not runner_session:
         console.print("[yellow]No sessions to clear[/yellow]")
         return
 
@@ -312,11 +414,11 @@ def clear_sessions() -> None:
         session_file = config.workspace_dir / "runner-session.txt"
         if session_file.exists():
             session_file.unlink()
-            console.print(f"[green]✓[/green] Cleared {count} sessions and runner session file")
+            console.print(f"[green]✓[/green] Cleared {runner_session} session and runner session file")
         else:
-            console.print(f"[green]✓[/green] Cleared {count} sessions")
+            console.print(f"[green]✓[/green] Cleared {runner_session} session")
     except Exception as e:
-        console.print(f"[green]✓[/green] Cleared {count} sessions")
+        console.print(f"[green]✓[/green] Cleared {runner_session} session")
         console.print(f"[yellow]Warning:[/yellow] Failed to delete runner session file: {e}")
 
 
@@ -369,7 +471,7 @@ async def add_prompt_to_session(
             raise typer.Exit(1)
     else:
         console.print("[yellow]No running session found[/yellow]")
-        session_id = None
+        console.print("Start the runner first with: [bold]devassist ai run[/bold]")
 
 
 @app.command("output")

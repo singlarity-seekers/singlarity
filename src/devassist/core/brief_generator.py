@@ -70,17 +70,20 @@ class BriefGenerator:
         # Make the call to Claude
         try:
             # Determine session handling
-            if refresh or not session_id:
-                # Use current session (auto-created)
-                response = await self._claude_client.make_call(user_prompt=prompt)
-            else:
-                # Resume existing session
+            if session_id:
+                # Resume existing session with provided session_id
                 response = await self._claude_client.make_call(
                     user_prompt=prompt, session_id=session_id
                 )
-
-            # Get the active session for metadata
-            latest_session = self._claude_client.get_latest_session()
+                # Get the session that was resumed/used
+                latest_session = self._claude_client.get_session_by_id(session_id)
+            else:
+                # ✅ Always create NEW session for brief (as per user requirement)
+                # Create a fresh ClaudeClient with new session for each brief
+                fresh_client = ClaudeClient(config=self._config)
+                response = await fresh_client.make_call(user_prompt=prompt)
+                # Get the newly created session
+                latest_session = fresh_client.session
 
             # Parse response into Brief object
             brief = self._parse_response_to_brief(response, resources)

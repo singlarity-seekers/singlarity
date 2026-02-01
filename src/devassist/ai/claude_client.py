@@ -224,6 +224,19 @@ class ClaudeClient:
         # Get session - use provided session_id or current client session
         if session_id and session_id in ClaudeClient._session_store:
             session = ClaudeClient._session_store[session_id]
+        elif session_id:
+            # ✅ Session ID provided but not in store (subprocess context)
+            # Create a minimal session object with the provided session_id
+            logger.info(f"Creating session object for subprocess session_id: {session_id}")
+            session = ClaudeSession(
+                session_id=session_id,
+                created_at=datetime.now(),
+                last_used=datetime.now(),
+                resources=[source.value for source in self.config.enabled_sources],
+                metadata={"sdk_client": self._init_sdk_client(), "output_format": self.config.output_format},
+            )
+            # Store for future use in this process
+            ClaudeClient._session_store[session_id] = session
         else:
             # Use the current client's session or create a new one if needed
             session = self.session
@@ -240,8 +253,19 @@ class ClaudeClient:
         try:
             # Wrap the entire Claude interaction with timeout
             async with asyncio.timeout(timeout_seconds):
+                # ✅ Add explicit connection check if the SDK supports it
+                try:
+                    # Try to determine if we're connected (SDK may not expose this method)
+                    if hasattr(sdk_client, 'is_connected') and not sdk_client.is_connected():
+                        logger.info(f"SDK client not connected - connecting for session {session.session_id}")
+                        await sdk_client.connect()
+                except AttributeError:
+                    # SDK doesn't have is_connected method, proceed with error-based detection
+                    pass
+
                 # Ensure SDK client is connected before first use
                 try:
+                    logger.info(f"Prompt: {user_prompt}")
                     await sdk_client.query(user_prompt, session_id=session.session_id)
                 except Exception as e:
                     # If not connected, try to connect and retry
@@ -254,14 +278,26 @@ class ClaudeClient:
 
                 # Collect response
                 response_parts = []
+                message_count = 0
                 async for message in sdk_client.receive_response():
+                    message_count += 1
+                    logger.debug(f"Received message #{message_count}: {type(message).__name__}")
+
                     if isinstance(message, AssistantMessage):
-                        for block in message.content:
+                        logger.debug(f"AssistantMessage with {len(message.content)} blocks")
+                        for i, block in enumerate(message.content):
+                            logger.debug(f"Block {i}: {type(block).__name__}")
                             if isinstance(block, TextBlock):
+                                logger.debug(f"TextBlock content length: {len(block.text)}")
                                 response_parts.append(block.text)
                             elif isinstance(block, ThinkingBlock):
                                 # Optionally include thinking blocks
+                                logger.debug(f"ThinkingBlock content length: {len(block.thinking)}")
                                 logger.debug(f"Claude thinking: {block.thinking[:100]}...")
+                    else:
+                        logger.debug(f"Non-AssistantMessage: {message}")
+
+                logger.debug(f"Total messages: {message_count}, response_parts: {len(response_parts)}")
 
         except asyncio.TimeoutError:
             logger.error(f"Claude API call timed out after {timeout_seconds}s for session {session.session_id}")
@@ -275,7 +311,16 @@ class ClaudeClient:
         session.turns += 1
 
         response = "\n".join(response_parts)
+
+        # ✅ Add response validation
+        if not response.strip():
+            logger.warning("Claude SDK returned empty response - check MCP server configuration")
+            # Don't return empty string, return a helpful message
+            return "No response received from Claude SDK. This may indicate MCP server connection issues or configuration problems."
+
         logger.info(f"Claude response received (session: {session.session_id}, turns: {session.turns})")
+        logger.debug(f"Response parts count: {len(response_parts)}, total length: {len(response)}")
+        logger.debug(f"Response content preview: {repr(response[:200])}")
 
         return response
 

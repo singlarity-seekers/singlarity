@@ -127,6 +127,7 @@ class RunnerManager:
         interval: int | None = None,
         prompt: str | None = None,
         session_id: str | None = None,
+        enable_slack: bool = True,
     ) -> None:
         """Start the background runner process.
 
@@ -134,6 +135,7 @@ class RunnerManager:
             interval: Interval in minutes between executions.
             prompt: Custom prompt to execute.
             session_id: Session ID to continue conversation.
+            enable_slack: Whether to enable Slack notifications.
 
         Raises:
             RuntimeError: If runner is already running or cannot acquire lock.
@@ -154,13 +156,28 @@ class RunnerManager:
             log_file = open(log_path, "a")
 
             # Pass CLI options via environment variables
+            # Copy ALL environment variables from current process
             env = os.environ.copy()
+            # ✅ Removed security vulnerability - don't log environment variables
+
+            # Log which critical environment variables are available
+            critical_vars = ["JIRA_PERSONAL_TOKEN",
+                           "JIRA_USERNAME", "GITHUB_TOKEN", "SLACK_USER_ID"]
+
+            for var in critical_vars:
+                if var in env:
+                    logger.debug(f"Environment variable {var} is available for subprocess")
+                else:
+                    logger.warning(f"Environment variable {var} is NOT set - this may cause Claude SDK issues")
+
             if interval is not None:
                 env["DEVASSIST_RUNNER_INTERVAL"] = str(interval)
             if prompt is not None:
                 env["DEVASSIST_RUNNER_PROMPT"] = prompt
             if session_id is not None:
                 env["DEVASSIST_RUNNER_SESSION_ID"] = session_id
+            # ✅ Fix missing environment variable
+            env["DEVASSIST_RUNNER_ENABLE_SLACK"] = "true" if enable_slack else "false"
 
             process = subprocess.Popen(
                 [
@@ -169,7 +186,7 @@ class RunnerManager:
                     "from devassist.cli.ai import run_background_runner; run_background_runner()",
                 ],
                 stdout=log_file,
-                stderr=log_file,
+                stderr=subprocess.STDOUT,  # Fix: Merge stderr into stdout to prevent duplicate logging
                 stdin=subprocess.DEVNULL,
                 start_new_session=True,  # Detach from parent process group
                 env=env,

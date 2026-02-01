@@ -69,18 +69,16 @@ class Runner:
         self.output_file = Path(output_file)
 
         # Session management for conversation continuity
+        self.is_continuation_session = False
         if session_id:
-            # Try to use existing session
-            existing_session = ClaudeClient.get_session_by_id(session_id)
-            if existing_session:
-                self.session_id = session_id
-                logger.info(f"Using existing session: {session_id}")
-            else:
-                logger.warning(f"Session {session_id} not found, creating new session")
-                self.session_id = self.claude_client.session.session_id
+            # ✅ Trust the session_id from file/parameter - Claude SDK should handle continuity
+            self.session_id = session_id
+            self.is_continuation_session = True  # ✅ Track that this is a continuation
+            logger.info(f"Using session from parameter/file: {session_id} (continuation)")
         else:
-            # Use the session created by claude_client
+            # Create new session
             self.session_id = self.claude_client.session.session_id
+            logger.info(f"Created new session: {self.session_id}")
 
         # Save session ID for CLI access
         self._save_session_id()
@@ -89,6 +87,7 @@ class Runner:
         self.output_file.parent.mkdir(parents=True, exist_ok=True)
 
         self._stop_requested = False
+        self._execution_count = 0  # ✅ Track executions within this runner instance
 
         # Register signal handlers for graceful shutdown
         signal.signal(signal.SIGTERM, self._handle_shutdown)
@@ -145,6 +144,9 @@ class Runner:
     async def _execute_prompt(self) -> None:
         """Execute the custom prompt and save output."""
         try:
+            # Increment execution count
+            self._execution_count += 1
+
             # Generate timestamp
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -154,7 +156,9 @@ class Runner:
 {self.custom_prompt}
 
     Please check my most urgent items requiring immediate attention."""
-            if self.session_id:
+
+            # ✅ Only add continuation prompt for subsequent executions (not the first one)
+            if self._execution_count > 1:
                 full_prompt = f"""
                 {full_prompt}
                 Please check if anything new or existing item that still needs my urgent attention
@@ -170,7 +174,7 @@ class Runner:
                 )
 
                 # Send Slack notification if enabled
-                if self.enable_slack and self.slack_client:
+                if self.enable_slack and self.slack_client and len(response) > 0:
                     try:
                         await self.slack_client.send_devassist_notification(
                             title="Devassist Action Summary",
