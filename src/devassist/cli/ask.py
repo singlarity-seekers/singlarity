@@ -56,6 +56,11 @@ def ask(
         devassist ask "Show me recent Slack messages" -s slack
         devassist ask "Give me a morning brief" -s github,slack
     """
+    # Check if setup is needed
+    from devassist.cli.setup import check_and_prompt_setup
+    if not check_and_prompt_setup():
+        raise typer.Exit(1)
+    
     asyncio.run(_ask_async(prompt, provider, servers, verbose))
 
 

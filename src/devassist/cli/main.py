@@ -89,10 +89,12 @@ def status() -> None:
 from devassist.cli.brief import app as brief_app
 from devassist.cli.config import app as config_app
 from devassist.cli.ask import ask as ask_command
+from devassist.cli.setup import app as setup_app
 
 # Register subcommands
 app.add_typer(config_app, name="config")
 app.add_typer(brief_app, name="brief")
+app.add_typer(setup_app, name="setup", help="Configure DevAssist connections")
 app.command(name="ask")(ask_command)
 
 
