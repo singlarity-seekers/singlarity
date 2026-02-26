@@ -226,7 +226,8 @@ def run(
         console.print(f"[blue]Starting AI runner in foreground (interval: {interval}m, Ctrl+C to stop)[/blue]")
         if session_id:
             console.print(f"[dim]Using session: {session_id}[/dim]")
-        console.print(f"[dim]Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}[/dim]")
+        prompt_display = prompt[:100] + '...' if prompt and len(prompt) > 100 else prompt or 'Default'
+        console.print(f"[dim]Prompt: {prompt_display}[/dim]")
 
         try:
             # Setup DEBUG logging for foreground (critical!)

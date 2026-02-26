@@ -5,9 +5,11 @@ Manages Claude sessions and API calls using the Claude Agent SDK.
 
 import asyncio
 import logging
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any, ClassVar
 from devassist.resources import get_mcp_servers_config
 
@@ -114,19 +116,36 @@ class ClaudeClient:
 
         # Build resolved configuration using McpServerConfig
         resolved_config = {}
+        logger.info(f"🔧 Configuring MCP servers for {len(target_sources)} sources: {list(target_sources)}")
+
         for server_name in target_sources:
             if server_name not in raw_mcp_config:
-                logger.warning(f"MCP config not found for server: {server_name}")
+                logger.warning(f"❌ MCP config not found for server: {server_name}")
                 continue
+
+            logger.info(f"🔧 Configuring MCP server: {server_name}")
 
             # Create McpServerConfig directly from JSON - field validator will resolve env vars
             raw_config = raw_mcp_config[server_name]
-            server_config = McpServerConfig(**raw_config)
+            logger.debug(f"📋 Raw config for {server_name}: {raw_config}")
 
-            # Convert back to dict for Claude SDK
-            resolved_config[server_name] = server_config.model_dump()
+            try:
+                server_config = McpServerConfig(**raw_config)
+                logger.info(f"✅ Successfully configured MCP server: {server_name}")
 
-        logger.debug(f"Resolved MCP config for {len(resolved_config)} servers: {list(resolved_config.keys())}")
+                # Convert back to dict for Claude SDK
+                resolved_config[server_name] = server_config.model_dump()
+                logger.debug(f"📋 Resolved config for {server_name}: {resolved_config[server_name]}")
+
+            except Exception as config_error:
+                logger.error(f"❌ Failed to configure MCP server {server_name}: {config_error}")
+                # Continue with other servers even if one fails
+                continue
+
+        logger.info(f"🔧 Successfully resolved MCP config for {len(resolved_config)} servers: {list(resolved_config.keys())}")
+        if len(resolved_config) == 0:
+            logger.warning(f"⚠️  No MCP servers configured - this will cause Claude SDK to have no context!")
+
         return resolved_config
 
     def _init_sdk_client(self) -> Any:
@@ -137,23 +156,56 @@ class ClaudeClient:
         """
         from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 
+        logger.info(f"🚀 Initializing Claude SDK client...")
+
         # Get MCP servers config from enabled sources
         mcp_servers = self._get_mcp_servers_config()
+        logger.info(f"🔧 Configured {len(mcp_servers)} MCP servers: {list(mcp_servers.keys())}")
 
         # Get system prompt from config
         system_prompt = self.config.resolved_system_prompt
+        logger.debug(f"📝 System prompt length: {len(system_prompt)} chars")
 
         # Configure options using config values
+        logger.info(f"⚙️  Configuring Claude SDK options...")
+
+        # Ensure permission_mode is a valid literal type
+        permission_mode = self.config.permission_mode
+        if permission_mode not in ["default", "acceptEdits", "plan", "bypassPermissions"]:
+            permission_mode = "bypassPermissions"  # Safe fallback
+            logger.warning(f"Invalid permission mode, using bypassPermissions")
+
+        # Resolve project root by walking up from this file until we find .claude/
+        parent_dir = Path(__file__).resolve().parent
+        project_root = parent_dir
+        for ancestor in parent_dir.parents:
+            if (ancestor / ".claude").is_dir():
+                project_root = ancestor
+                break
+
+        # Build settings path only if .claude dir exists
+        claude_dir = project_root / ".claude"
+        settings_file = claude_dir / "settings.local.json" if claude_dir.is_dir() else None
+
+        # Build env dict with os environments variables
+        sdk_env = os.environ.copy()
+
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
             mcp_servers=mcp_servers,
-            permission_mode=self.config.permission_mode,
+            permission_mode=permission_mode,  # type: ignore
             max_thinking_tokens=10_000,
-            max_buffer_size=10_000_000
+            max_buffer_size=10_000_000,
+            cwd=str(project_root),
+            settings=str(settings_file) if settings_file and settings_file.exists() else None,
+            env=sdk_env,
         )
+        logger.info(f"✅ Claude SDK options configured successfully")
 
         # Initialize SDK client
+        logger.info(f"🤖 Creating Claude SDK client instance...")
         sdk_client = ClaudeSDKClient(options=options)
+        logger.info(f"✅ Claude SDK client created successfully")
 
         # Connect the SDK client immediately
         import asyncio
@@ -221,25 +273,14 @@ class ClaudeClient:
         """
         from claude_agent_sdk import AssistantMessage, TextBlock, ThinkingBlock
 
-        # Get session - use provided session_id or current client session
-        if session_id and session_id in ClaudeClient._session_store:
-            session = ClaudeClient._session_store[session_id]
-        elif session_id:
-            # ✅ Session ID provided but not in store (subprocess context)
-            # Create a minimal session object with the provided session_id
-            logger.info(f"Creating session object for subprocess session_id: {session_id}")
-            session = ClaudeSession(
-                session_id=session_id,
-                created_at=datetime.now(),
-                last_used=datetime.now(),
-                resources=[source.value for source in self.config.enabled_sources],
-                metadata={"sdk_client": self._init_sdk_client(), "output_format": self.config.output_format},
-            )
-            # Store for future use in this process
-            ClaudeClient._session_store[session_id] = session
-        else:
-            # Use the current client's session or create a new one if needed
-            session = self.session
+        logger.info(f"Creating session object for subprocess session_id: {session_id}")
+        session = ClaudeSession(
+            session_id=session_id,
+            created_at=datetime.now(),
+            last_used=datetime.now(),
+            resources=[source.value for source in self.config.enabled_sources],
+            metadata={"sdk_client": self._init_sdk_client(), "output_format": self.config.output_format},
+        )
 
         # Get SDK client from session metadata
         sdk_client = session.metadata.get("sdk_client")
@@ -264,40 +305,63 @@ class ClaudeClient:
                     pass
 
                 # Ensure SDK client is connected before first use
+                logger.info(f"🔍 Starting Claude SDK query with session_id: {session.session_id}")
+
+                # Add SDK client debugging
+                if hasattr(sdk_client, '__dict__'):
+                    logger.info(f"🔍 SDK client state before query: {list(sdk_client.__dict__.keys())}")
+
                 try:
-                    logger.info(f"Prompt: {user_prompt}")
+                    logger.info(f"📡 Sending query to Claude SDK...")
                     await sdk_client.query(user_prompt, session_id=session.session_id)
+                    logger.info(f"✅ Query sent successfully to Claude SDK")
+
+                    # Add debugging after query
+                    logger.info(f"🔍 SDK client state after query sent")
+
                 except Exception as e:
                     # If not connected, try to connect and retry
                     if "Not connected" in str(e) or "connect" in str(e).lower():
-                        logger.info(f"Connecting SDK client for session {session.session_id}")
+                        logger.info(f"🔄 SDK not connected, connecting for session {session.session_id}")
                         await sdk_client.connect()
+                        logger.info(f"📡 Retrying query after connection...")
                         await sdk_client.query(user_prompt, session_id=session.session_id)
+                        logger.info(f"✅ Query sent successfully after reconnection")
                     else:
+                        logger.error(f"❌ Query failed with error: {e}")
                         raise
 
-                # Collect response
+                # Collect response with enhanced logging
+                logger.info(f"👂 Starting to receive response from Claude SDK...")
                 response_parts = []
                 message_count = 0
-                async for message in sdk_client.receive_response():
-                    message_count += 1
-                    logger.debug(f"Received message #{message_count}: {type(message).__name__}")
 
-                    if isinstance(message, AssistantMessage):
-                        logger.debug(f"AssistantMessage with {len(message.content)} blocks")
-                        for i, block in enumerate(message.content):
-                            logger.debug(f"Block {i}: {type(block).__name__}")
-                            if isinstance(block, TextBlock):
-                                logger.debug(f"TextBlock content length: {len(block.text)}")
-                                response_parts.append(block.text)
-                            elif isinstance(block, ThinkingBlock):
-                                # Optionally include thinking blocks
-                                logger.debug(f"ThinkingBlock content length: {len(block.thinking)}")
-                                logger.debug(f"Claude thinking: {block.thinking[:100]}...")
-                    else:
-                        logger.debug(f"Non-AssistantMessage: {message}")
+                try:
+                    async for message in sdk_client.receive_response():
+                        message_count += 1
+                        logger.info(f"📨 Received message #{message_count}: {type(message).__name__}")
 
-                logger.debug(f"Total messages: {message_count}, response_parts: {len(response_parts)}")
+                        if isinstance(message, AssistantMessage):
+                            logger.info(f"🤖 AssistantMessage with {len(message.content)} blocks")
+                            for i, block in enumerate(message.content):
+                                logger.debug(f"📦 Block {i}: {type(block).__name__}")
+                                if isinstance(block, TextBlock):
+                                    logger.info(f"📝 TextBlock content length: {len(block.text)}")
+                                    response_parts.append(block.text)
+                                elif isinstance(block, ThinkingBlock):
+                                    # Optionally include thinking blocks
+                                    logger.debug(f"💭 ThinkingBlock content length: {len(block.thinking)}")
+                        else:
+                            logger.warning(f"⚠️  Non-AssistantMessage: {type(message)} - {message}")
+                except Exception as response_error:
+                    logger.error(f"❌ Error during response reception: {response_error}")
+                    logger.error(f"📊 Messages received before error: {message_count}")
+                    raise
+
+                logger.info(f"📊 Response collection complete - Total messages: {message_count}, response_parts: {len(response_parts)}")
+                if message_count == 0:
+                    logger.error(f"❌ CRITICAL: No messages received from Claude SDK!")
+                    logger.error(f"🔍 This usually indicates MCP server connection issues or SDK configuration problems")
 
         except asyncio.TimeoutError:
             logger.error(f"Claude API call timed out after {timeout_seconds}s for session {session.session_id}")

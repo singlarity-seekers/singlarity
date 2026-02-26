@@ -114,7 +114,9 @@ export JIRA_PERSONAL_TOKEN="your-jira-api-token"
 # GitHub Integration (Required for GitHub source)
 export GITHUB_TOKEN="your-github-personal-access-token"
 
-# Claude AI authentication is handled automatically by Agent SDK
+# Slack Notifications (For background runner notifications is slack notifications are enabled)
+export SLACK_BOT_TOKEN="xoxb-your-slack-bot-token"
+export SLACK_USER_ID="U1234567890"  # Your Slack user ID for DM notifications
 ```
 
 #### Optional Environment Variables
@@ -122,10 +124,6 @@ export GITHUB_TOKEN="your-github-personal-access-token"
 ```bash
 # JIRA Configuration (Optional)
 export JIRA_SSL_VERIFY="true"  # Set to "false" for self-signed certs (default: true)
-
-# Slack Notifications (Optional - for background runner notifications)
-export SLACK_BOT_TOKEN="xoxb-your-slack-bot-token"
-export SLACK_USER_ID="U1234567890"  # Your Slack user ID for DM notifications
 
 # Gmail Integration (Future - when MCP server available)
 export GMAIL_CLIENT_ID="your-gmail-oauth-client-id"
@@ -256,83 +254,6 @@ devassist ai prompt --prompt "Custom instruction"  # Send prompt to runner sessi
 
 ### High-Level System Architecture
 
-```mermaid
-flowchart TB
-    subgraph "👤 User Experience"
-        A1[🌅 Morning Brief<br/>devassist brief]
-        A2[🤖 Background Monitoring<br/>devassist ai run]
-        A3[💬 Follow-up Questions<br/>devassist brief --prompt]
-    end
-
-    subgraph "📊 Developer Data Sources"
-        B1[📋 JIRA Issues<br/>• Assigned tasks<br/>• Urgent tickets<br/>• Project updates]
-        B2[⚡ GitHub Activity<br/>• PR reviews<br/>• Code changes<br/>• Repository updates]
-        B3[📧 Gmail Integration<br/>• Important emails<br/>• Meeting invites<br/>• Action items]
-        B4[💬 Slack Communications<br/>• Team messages<br/>• Notifications<br/>• Mentions]
-    end
-
-    subgraph "🧠 AI Intelligence Layer"
-        C1[🔮 Claude AI Processing]
-        C2[⚙️ Context Integration]
-        C3[🎯 Priority Analysis]
-        C4[📝 Natural Language Generation]
-    end
-
-    subgraph "✨ Business Outcomes"
-        D1[📈 Prioritized Daily Brief<br/>• Top priorities<br/>• Action items<br/>• Code reviews]
-        D2[⏰ Automated Monitoring<br/>• Background analysis<br/>• Continuous updates<br/>• Proactive alerts]
-        D3[🎯 Focus & Productivity<br/>• Reduced context switching<br/>• Clear priorities<br/>• Informed decisions]
-        D4[🔄 Continuous Learning<br/>• Session continuity<br/>• Context awareness<br/>• Personalized insights]
-    end
-
-    %% User to Data Sources
-    A1 -.-> B1
-    A1 -.-> B2
-    A1 -.-> B3
-    A1 -.-> B4
-
-    A2 -.-> B1
-    A2 -.-> B2
-
-    %% Data Sources to AI
-    B1 --> C1
-    B2 --> C1
-    B3 --> C1
-    B4 --> C1
-
-    C1 --> C2
-    C2 --> C3
-    C3 --> C4
-
-    %% AI to Outcomes
-    C4 --> D1
-    C4 --> D2
-
-    %% Outcomes to User Value
-    D1 --> D3
-    D2 --> D3
-    D1 --> D4
-    D2 --> D4
-
-    %% Follow-up loop
-    A3 -.-> C1
-    D4 -.-> A3
-
-    style A1 fill:#e3f2fd
-    style A2 fill:#e8f5e8
-    style A3 fill:#fff3e0
-    style C1 fill:#f3e5f5
-    style D3 fill:#e8f5e8
-    style D4 fill:#fff3e0
-
-    classDef dataSource fill:#f5f5f5,stroke:#666,color:#333
-    classDef aiLayer fill:#f3e5f5,stroke:#8e24aa,color:#4a148c
-    classDef outcome fill:#e8f5e8,stroke:#4caf50,color:#1b5e20
-
-    class B1,B2,B3,B4 dataSource
-    class C1,C2,C3,C4 aiLayer
-    class D1,D2,D3,D4 outcome
-```
 
 ### Key Business Benefits
 

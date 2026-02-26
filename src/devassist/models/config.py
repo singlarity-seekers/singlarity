@@ -64,7 +64,7 @@ class ClientConfig(BaseModel):
         description="AI model to use (user-friendly name)"
     )
     ai_timeout_seconds: int = Field(
-        default=180,
+        default=240,
         description="AI query timeout (10-600 seconds)"
     )
 

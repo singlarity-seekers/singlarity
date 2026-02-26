@@ -16,7 +16,7 @@ from devassist import __version__
 # Create main Typer app
 app = typer.Typer(
     name="devassist",
-    help="Developer Assistant CLI - Your AI-powered morning brief.",
+    help="Developer Assistant CLI - Your AI-powered personal assistant.",
     add_completion=False,
     no_args_is_help=True,
 )
