@@ -7,6 +7,7 @@ import asyncio
 from typing import Any
 
 from devassist.ai.prompts import NO_ITEMS_SUMMARY, build_summarization_prompt, get_system_prompt
+from devassist.models.config import DEFAULT_VERTEX_GEMINI_MODEL, sanitize_gcp_field
 from devassist.models.context import ContextItem
 
 # Google Cloud AI imports are done lazily to avoid initialization issues
@@ -47,7 +48,7 @@ def _is_vertex_available() -> bool:
 class VertexAIClient:
     """Client for Vertex AI Gemini model interactions."""
 
-    DEFAULT_MODEL = "gemini-1.5-flash"
+    DEFAULT_MODEL = DEFAULT_VERTEX_GEMINI_MODEL
     DEFAULT_LOCATION = "us-central1"
     DEFAULT_MAX_RETRIES = 3
     DEFAULT_TIMEOUT = 60
@@ -72,9 +73,9 @@ class VertexAIClient:
             timeout_seconds: Request timeout.
             max_input_tokens: Maximum input tokens for context.
         """
-        self.project_id = project_id or ""
-        self.location = location or self.DEFAULT_LOCATION
-        self.model = model or self.DEFAULT_MODEL
+        self.project_id = sanitize_gcp_field(project_id or "")
+        self.location = sanitize_gcp_field(location or self.DEFAULT_LOCATION)
+        self.model = sanitize_gcp_field(model or self.DEFAULT_MODEL)
         self.max_retries = max_retries if max_retries is not None else self.DEFAULT_MAX_RETRIES
         self.timeout_seconds = timeout_seconds or self.DEFAULT_TIMEOUT
         self.max_input_tokens = max_input_tokens or self.DEFAULT_MAX_INPUT_TOKENS

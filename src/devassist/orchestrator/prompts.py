@@ -14,7 +14,7 @@ def get_system_prompt() -> str:
 **Current Time**: {current_time}
 
 Your role is to help developers by:
-1. Fetching information from their configured tools (GitHub, Slack, JIRA, etc.)
+1. Fetching information from their configured tools (GitHub, Atlassian, etc.)
 2. Summarizing and prioritizing information
 3. Answering questions about their work context
 
@@ -25,7 +25,7 @@ Your role is to help developers by:
 ORCHESTRATOR_SYSTEM_PROMPT = """You are DevAssist, an intelligent developer assistant.
 
 Your role is to help developers by:
-1. Fetching information from their configured tools (GitHub, Slack, JIRA, etc.)
+1. Fetching information from their configured tools (GitHub, Atlassian, etc.)
 2. Summarizing and prioritizing information
 3. Answering questions about their work context
 
@@ -54,11 +54,11 @@ You have access to various MCP tools from different services. Use them to gather
 User: "What are my GitHub notifications?"
 → Use github tools to fetch notifications, then summarize them
 
-User: "Show me today's Slack messages"
-→ Use slack tools to fetch recent messages, filter to today, summarize
+User: "What are my open Jira issues?"
+→ Use atlassian tools to search issues assigned to me, then summarize
 
 User: "Give me a morning brief"
-→ Use multiple tools (github, slack, jira) to gather context, then create a prioritized summary
+→ Use multiple tools (e.g. github, atlassian) to gather context, then create a prioritized summary
 """
 
 

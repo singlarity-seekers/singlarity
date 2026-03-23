@@ -4,8 +4,54 @@ Manages the registry of available MCP servers and their configurations.
 """
 
 import os
+import shutil
+import sys
+import tempfile
 from dataclasses import dataclass, field
 from typing import Any
+
+
+def _file_is_executable(path: str) -> bool:
+    """True if ``path`` looks runnable on this OS (POSIX + Windows)."""
+    if not os.path.isfile(path):
+        return False
+    if sys.platform == "win32":
+        lower = path.lower()
+        if lower.endswith((".exe", ".cmd", ".bat", ".ps1")):
+            return True
+    return os.access(path, os.X_OK)
+
+
+def _resolve_npm_runner() -> str:
+    """Resolve ``npx`` for Node-based MCP servers (handles ``npx.cmd`` on Windows)."""
+    for name in ("npx", "npx.cmd"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return "npx"
+
+
+def _resolve_mcp_executable(binary_name: str) -> str:
+    """Resolve a standalone MCP binary: PATH, then ``.exe`` on Windows, then Unix prefixes."""
+    found = shutil.which(binary_name)
+    if found:
+        return found
+    if sys.platform == "win32":
+        found = shutil.which(f"{binary_name}.exe")
+        if found:
+            return found
+        return binary_name
+    for prefix in ("/opt/homebrew/bin", "/usr/local/bin"):
+        candidate = os.path.join(prefix, binary_name)
+        if _file_is_executable(candidate):
+            return candidate
+    return binary_name
+
+
+_NPX = _resolve_npm_runner()
+
+# Atlassian-hosted MCP (stdio via ``npx mcp-remote``); see https://mcp.atlassian.com
+ATLASSIAN_REMOTE_MCP_URL = "https://mcp.atlassian.com/v1/mcp"
 
 
 @dataclass
@@ -13,7 +59,7 @@ class MCPServerConfig:
     """Configuration for an MCP server.
 
     Attributes:
-        name: Unique identifier for this server (e.g., "github", "slack")
+        name: Unique identifier for this server (e.g., "github", "atlassian")
         command: Command to launch the server (e.g., "npx", "uvx", "python")
         args: Arguments to pass to the command
         env: Environment variables required by the server
@@ -45,53 +91,32 @@ class MCPRegistry:
     DEFAULT_SERVERS: dict[str, MCPServerConfig] = {
         "github": MCPServerConfig(
             name="github",
-            command="npx",
+            command=_NPX,
             args=["-y", "@modelcontextprotocol/server-github"],
             env={"GITHUB_PERSONAL_ACCESS_TOKEN": ""},
             description="GitHub integration - repos, issues, PRs, notifications",
         ),
-        "slack": MCPServerConfig(
-            name="slack",
-            command="npx",
-            args=["-y", "@modelcontextprotocol/server-slack"],
-            env={"SLACK_BOT_TOKEN": "", "SLACK_TEAM_ID": ""},
-            description="Slack integration - channels, messages, users",
-        ),
         "gmail": MCPServerConfig(
             name="gmail",
-            command="npx",
+            command=_NPX,
             args=["-y", "@modelcontextprotocol/server-google-drive"],
             env={"GOOGLE_CLIENT_ID": "", "GOOGLE_CLIENT_SECRET": "", "GOOGLE_REDIRECT_URI": ""},
             description="Gmail/Google Drive integration - emails, documents",
         ),
         "filesystem": MCPServerConfig(
             name="filesystem",
-            command="npx",
-            args=["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+            command=_NPX,
+            args=["-y", "@modelcontextprotocol/server-filesystem", tempfile.gettempdir()],
             env={},
             description="Local filesystem access",
         ),
-        "jira": MCPServerConfig(
-            name="jira",
-            command="/opt/homebrew/bin/mcp-jira-server",
-            args=[],
-            env={"JIRA_BASE_URL": "", "JIRA_PAT": ""},
-            description="JIRA integration (legacy) - issues, projects, sprints",
-        ),
         "atlassian": MCPServerConfig(
             name="atlassian",
-            command="npx",
-            args=[
-                "-y",
-                "mcp-remote",
-                "https://mcp.atlassian.com/v1/mcp",
-                "--resource",
-                "",  # Will be populated with ATLASSIAN_SITE_URL
-            ],
-            env={
-                "ATLASSIAN_SITE_URL": "",  # e.g., https://redhat.atlassian.net/
-            },
-            description="Atlassian Rovo MCP Server - Jira, Confluence, Compass (official)",
+            command=_NPX,
+            args=["-y", "mcp-remote", ATLASSIAN_REMOTE_MCP_URL],
+            env={},
+            description="Atlassian Cloud (remote MCP) - Jira, Confluence via mcp.atlassian.com",
+            enabled=False,
         ),
     }
 
@@ -99,7 +124,8 @@ class MCPRegistry:
         """Initialize the registry with default servers.
         
         Environment variables from the system are automatically loaded
-        to configure servers (e.g., SLACK_BOT_TOKEN, GITHUB_PERSONAL_ACCESS_TOKEN).
+        to configure servers (e.g., GITHUB_PERSONAL_ACCESS_TOKEN). Atlassian uses
+        remote MCP (``mcp-remote``); auth is handled when the connector runs.
         """
         self._servers: dict[str, MCPServerConfig] = {}
         # Load defaults and populate from environment

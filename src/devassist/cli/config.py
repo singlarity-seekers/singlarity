@@ -8,13 +8,13 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
 
 from devassist.adapters import get_adapter, list_available_adapters
 from devassist.adapters.errors import AuthenticationError, SourceUnavailableError
 from devassist.core.config_manager import ConfigManager
+from devassist.cli.security import show_security_warning
 from devassist.models.context import SourceType
 
 # Create router for config commands
@@ -25,19 +25,6 @@ app = typer.Typer(
 )
 
 console = Console()
-
-
-def show_security_warning() -> None:
-    """Display security warning about credential storage."""
-    from rich.text import Text
-
-    warning_text = Text()
-    warning_text.append("DEV MODE: ", style="bold yellow")
-    warning_text.append(
-        "Credentials are stored in plain text at ~/.devassist/config.yaml. "
-        "Do not use in production without proper secret management."
-    )
-    console.print(Panel(warning_text, title="Security Notice", border_style="yellow"))
 
 
 @app.command("add")
@@ -51,7 +38,7 @@ def add_source(
 
     Guides through the authentication setup for the specified source.
     """
-    show_security_warning()
+    show_security_warning(console)
     console.print()
 
     # Validate source type

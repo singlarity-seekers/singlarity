@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from devassist.mcp.client import ToolSchema
+from devassist.models.config import DEFAULT_VERTEX_GEMINI_MODEL, sanitize_gcp_field
 
 
 @dataclass
@@ -86,7 +87,7 @@ class VertexAILLMClient(LLMClient):
     use AnthropicLLMClient with CLAUDE_CODE_USE_VERTEX=1.
     """
 
-    DEFAULT_MODEL = "gemini-1.5-flash"
+    DEFAULT_MODEL = DEFAULT_VERTEX_GEMINI_MODEL
 
     def __init__(
         self,
@@ -101,9 +102,9 @@ class VertexAILLMClient(LLMClient):
             location: GCP region.
             model: Model name.
         """
-        self.project_id = project_id or ""
-        self.location = location
-        self.model = model or self.DEFAULT_MODEL
+        self.project_id = sanitize_gcp_field(project_id or "")
+        self.location = sanitize_gcp_field(location)
+        self.model = sanitize_gcp_field(model or self.DEFAULT_MODEL)
         self._client: Any = None
         self._genai = None
         self._types = None

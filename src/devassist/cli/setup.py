@@ -4,6 +4,7 @@ Guides new users through configuring their MCP connections.
 """
 
 import os
+import sys
 from pathlib import Path
 
 import typer
@@ -38,6 +39,21 @@ def load_existing_config() -> dict[str, str]:
     return config
 
 
+def load_devassist_env_into_os() -> None:
+    """Merge ~/.devassist/.env into os.environ.
+
+    MCPRegistry and LLM clients read credentials from the environment. The setup
+    wizard persists them to ~/.devassist/.env only; without this step, ``devassist
+    chat`` / ``devassist ask`` would see empty tokens even after a successful setup.
+
+    Values already set in the process environment are not overwritten.
+    """
+    config = load_existing_config()
+    for key, value in config.items():
+        if value and not os.environ.get(key):
+            os.environ[key] = value
+
+
 def save_config(config: dict[str, str]) -> None:
     """Save configuration to .env file."""
     env_file = get_env_file_path()
@@ -57,11 +73,11 @@ def save_config(config: dict[str, str]) -> None:
             "ANTHROPIC_VERTEX_PROJECT_ID",
         ],
         "GitHub": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
-        "JIRA (Legacy)": ["JIRA_BASE_URL", "JIRA_PAT"],
-        "Atlassian Rovo MCP (Jira/Confluence)": [
-            "ATLASSIAN_SITE_URL",
+        "Atlassian (Jira/Confluence)": [
+            "ATLASSIAN_BASE_URL",
+            "ATLASSIAN_EMAIL",
+            "ATLASSIAN_API_TOKEN",
         ],
-        "Slack": ["SLACK_BOT_TOKEN", "SLACK_TEAM_ID"],
     }
     
     for category, keys in categories.items():
@@ -86,8 +102,12 @@ def save_config(config: dict[str, str]) -> None:
     
     with open(env_file, "w") as f:
         f.write("\n".join(lines))
-    
-    os.chmod(env_file, 0o600)  # Secure permissions
+
+    try:
+        os.chmod(env_file, 0o600)
+    except OSError:
+        # Windows or filesystems without POSIX mode bits
+        pass
 
 
 @app.command()
@@ -97,8 +117,7 @@ def init():
     Guides you through configuring:
     - Claude AI (via Red Hat Vertex AI)
     - GitHub integration
-    - JIRA integration  
-    - Slack integration (optional)
+    - Atlassian (Jira Cloud / Confluence)
     """
     console.print(Panel.fit(
         "[bold blue]🚀 DevAssist Setup Wizard[/bold blue]\n\n"
@@ -175,55 +194,6 @@ def init():
         config["ATLASSIAN_SITE_URL"] = atlassian_url
         console.print("   [green]✓[/green] Atlassian configured (OAuth - browser auth on first use)")
     
-    # === JIRA (Legacy - for self-hosted) ===
-    console.print("\n[bold cyan]4. JIRA Configuration (Legacy - for self-hosted)[/bold cyan]")
-    console.print("   For self-hosted JIRA (e.g., https://issues.redhat.com)")
-    console.print("   Create a PAT in JIRA: Profile → Personal Access Tokens\n")
-    
-    current_jira_url = config.get("JIRA_BASE_URL", "")
-    current_jira_pat = config.get("JIRA_PAT", "")
-    
-    if Confirm.ask("   Configure legacy JIRA?", default=False):
-        jira_url = Prompt.ask(
-            "   Enter JIRA base URL",
-            default=current_jira_url or "https://issues.redhat.com"
-        )
-        config["JIRA_BASE_URL"] = jira_url
-        
-        jira_pat = Prompt.ask(
-            "   Enter your JIRA Personal Access Token",
-            password=True,
-            default=""
-        )
-        if jira_pat:
-            config["JIRA_PAT"] = jira_pat
-            console.print("   [green]✓[/green] JIRA configured")
-        elif current_jira_pat:
-            console.print("   [green]✓[/green] Keeping existing JIRA token")
-    
-    # === Slack (Optional) ===
-    console.print("\n[bold cyan]5. Slack Configuration (Optional)[/bold cyan]")
-    console.print("   Requires a Slack App with appropriate scopes.\n")
-    
-    if Confirm.ask("   Configure Slack?", default=False):
-        slack_token = Prompt.ask(
-            "   Enter your Slack Bot Token (xoxb-...)",
-            password=True,
-            default=config.get("SLACK_BOT_TOKEN", "")
-        )
-        if slack_token:
-            config["SLACK_BOT_TOKEN"] = slack_token
-        
-        slack_team = Prompt.ask(
-            "   Enter your Slack Team ID (T...)",
-            default=config.get("SLACK_TEAM_ID", "")
-        )
-        if slack_team:
-            config["SLACK_TEAM_ID"] = slack_team
-        
-        if slack_token and slack_team:
-            console.print("   [green]✓[/green] Slack configured")
-    
     # === Save Configuration ===
     console.print("\n[bold cyan]Saving configuration...[/bold cyan]")
     save_config(config)
@@ -232,16 +202,27 @@ def init():
     console.print(f"   [green]✓[/green] Configuration saved to: {env_file}")
     
     # === Summary ===
+    if sys.platform == "win32":
+        env_hint = (
+            "Load these variables into your environment before running DevAssist "
+            "(e.g. System Properties → Environment Variables, or your shell profile).\n"
+            f"Config file: [dim]{env_file}[/dim]"
+        )
+    else:
+        env_hint = (
+            "To load in your shell:\n"
+            f"  [cyan]source {env_file}[/cyan]\n\n"
+            "Or add that line to your shell profile (e.g. ~/.bashrc or ~/.zshrc)."
+        )
+
     console.print(Panel.fit(
         "[bold green]Setup Complete![/bold green]\n\n"
-        "To use DevAssist, run:\n"
-        f"  [cyan]source {env_file}[/cyan]\n"
-        "  [cyan]devassist ask \"Give me a morning brief\" -s atlassian,github[/cyan]\n\n"
-        "Or start an interactive chat session:\n"
-        "  [cyan]devassist chat -s atlassian,github[/cyan]\n\n"
-        "Or add to your ~/.zshrc:\n"
-        f"  [dim]source {env_file}[/dim]",
-        border_style="green"
+        f"{env_hint}\n\n"
+        "Try:\n"
+        '  [cyan]devassist ask "Give me a morning brief" -s atlassian,github[/cyan]\n'
+        "Or:\n"
+        "  [cyan]devassist chat -s atlassian,github[/cyan]",
+        border_style="green",
     ))
 
 
@@ -259,9 +240,7 @@ def status():
         ("Claude AI (Vertex)", config.get("CLAUDE_CODE_USE_VERTEX") == "1" and config.get("ANTHROPIC_VERTEX_PROJECT_ID")),
         ("Claude AI (Direct)", config.get("ANTHROPIC_API_KEY")),
         ("GitHub", config.get("GITHUB_PERSONAL_ACCESS_TOKEN")),
-        ("Atlassian Rovo MCP", config.get("ATLASSIAN_SITE_URL")),
-        ("JIRA (Legacy)", config.get("JIRA_BASE_URL") and config.get("JIRA_PAT")),
-        ("Slack", config.get("SLACK_BOT_TOKEN") and config.get("SLACK_TEAM_ID")),
+        ("Atlassian", config.get("ATLASSIAN_BASE_URL") and config.get("ATLASSIAN_EMAIL") and config.get("ATLASSIAN_API_TOKEN")),
     ]
     
     for name, configured in checks:
@@ -290,8 +269,7 @@ def check_and_prompt_setup() -> bool:
     )
     has_source = (
         config.get("GITHUB_PERSONAL_ACCESS_TOKEN")
-        or config.get("ATLASSIAN_SITE_URL")
-        or (config.get("JIRA_BASE_URL") and config.get("JIRA_PAT"))
+        or (config.get("ATLASSIAN_BASE_URL") and config.get("ATLASSIAN_EMAIL") and config.get("ATLASSIAN_API_TOKEN"))
     )
     
     if has_claude and has_source:

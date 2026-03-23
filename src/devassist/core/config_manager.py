@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 
-from devassist.models.config import AIConfig, AppConfig
+from devassist.models.config import AIConfig, AppConfig, sanitize_gcp_field
 
 
 class ConfigManager:
@@ -95,6 +95,19 @@ class ConfigManager:
             current_ai = config_dict.get("ai", {})
             current_ai.update(ai_overrides)
             config_dict["ai"] = current_ai
+
+        # Brief uses ``config.ai.project_id``; also honor GCP project from setup / shell
+        current_ai = config_dict.get("ai") or {}
+        if not (current_ai.get("project_id") or "").strip():
+            for key in (
+                "ANTHROPIC_VERTEX_PROJECT_ID",
+                "GOOGLE_CLOUD_PROJECT",
+                "GCLOUD_PROJECT",
+            ):
+                if raw := os.environ.get(key):
+                    current_ai["project_id"] = sanitize_gcp_field(raw)
+                    config_dict["ai"] = current_ai
+                    break
 
         # Workspace dir override
         if workspace := os.environ.get(f"{self.ENV_PREFIX}WORKSPACE_DIR"):

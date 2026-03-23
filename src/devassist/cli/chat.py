@@ -13,7 +13,11 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.markdown import Markdown
 from rich.table import Table
 
-from devassist.core.config_manager import ConfigManager
+from devassist.cli.mcp_prepare import (
+    ensure_setup_complete,
+    prepare_orchestration_agent,
+    print_mcp_connection_error,
+)
 
 console = Console()
 
@@ -48,7 +52,7 @@ def chat(
         typer.Option(
             "--servers",
             "-s",
-            help="Comma-separated list of MCP servers to connect (github,atlassian,slack)",
+            help="Comma-separated list of MCP servers to connect (github,atlassian,filesystem)",
         ),
     ] = None,
     verbose: Annotated[
@@ -64,17 +68,14 @@ def chat(
 
     Connect to MCP servers and engage in a continuous conversation.
     The assistant maintains context across turns and can access
-    GitHub, Jira, Slack, and other configured services.
+    GitHub, Atlassian (Jira/Confluence), and other configured services.
 
     Examples:
         devassist chat
         devassist chat -s github,atlassian
         devassist chat -p vertex -v
     """
-    from devassist.cli.setup import check_and_prompt_setup
-    if not check_and_prompt_setup():
-        raise typer.Exit(1)
-
+    ensure_setup_complete()
     asyncio.run(_chat_loop(provider, servers, verbose))
 
 
@@ -84,71 +85,16 @@ async def _chat_loop(
     verbose: bool,
 ) -> None:
     """Async implementation of the chat REPL loop."""
-    from devassist.mcp.client import MCPClient
-    from devassist.mcp.registry import MCPRegistry
-    from devassist.orchestrator.agent import OrchestrationAgent
-    from devassist.orchestrator.llm_client import AnthropicLLMClient, VertexAILLMClient
-
-    config_manager = ConfigManager()
-
-    # Create LLM client
-    if provider == "anthropic":
-        llm_client = AnthropicLLMClient()
-    else:
-        ai_config = config_manager.get_ai_config()
-        llm_client = VertexAILLMClient(
-            project_id=ai_config.get("project_id"),
-            location=ai_config.get("location", "us-central1"),
-        )
-
-    # Create MCP components
-    mcp_client = MCPClient()
-    registry = MCPRegistry()
-
-    # Load MCP server configs from user config
-    mcp_config = config_manager.get_mcp_config()
-    if mcp_config:
-        for name, server_config in mcp_config.items():
-            registry.configure_server(name, server_config.get("env", {}))
-
-    # Determine which servers to connect
-    if servers:
-        server_names = [s.strip() for s in servers.split(",")]
-    else:
-        server_names = [s.name for s in registry.list_configured()]
-
-    if not server_names:
-        console.print(
-            Panel(
-                "[yellow]No MCP servers configured.[/yellow]\n\n"
-                "To configure servers, run:\n"
-                "  devassist setup\n\n"
-                "Or specify servers with credentials via environment:\n"
-                "  GITHUB_PERSONAL_ACCESS_TOKEN=xxx devassist chat -s github",
-                title="No Servers Available",
-            )
-        )
-        return
-
-    # Get server configs
-    server_configs = []
-    for name in server_names:
-        config = registry.get(name)
-        if config and config.is_configured():
-            server_configs.append(config)
-        elif verbose:
-            console.print(f"[yellow]Skipping {name}: not configured[/yellow]")
-
-    if not server_configs:
-        console.print("[red]No configured MCP servers available.[/red]")
-        return
-
-    # Create agent
-    agent = OrchestrationAgent(
-        llm_client=llm_client,
-        mcp_client=mcp_client,
-        registry=registry,
+    prepared = prepare_orchestration_agent(
+        provider,
+        servers,
+        verbose,
+        no_servers_mode="chat",
+        console=console,
     )
+    if prepared is None:
+        return
+    agent, mcp_client, server_configs = prepared
 
     # Connect to MCP servers
     console.print()
@@ -288,8 +234,5 @@ async def _chat_loop(
                     console.print()
 
         except Exception as e:
-            console.print(f"[red]Failed to connect to MCP servers: {e}[/red]")
-            if verbose:
-                import traceback
-                console.print(f"[dim]{traceback.format_exc()}[/dim]")
+            print_mcp_connection_error(console, e, verbose)
             return

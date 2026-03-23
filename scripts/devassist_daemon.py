@@ -100,28 +100,11 @@ class DevAssistDaemon:
                 servers.append(config)
                 logger.info("GitHub MCP server configured")
 
-        # Check Atlassian Rovo MCP (Jira/Confluence/Compass)
-        if os.environ.get("ATLASSIAN_SITE_URL"):
-            config = registry.get("atlassian")
-            if config:
-                site_url = os.environ["ATLASSIAN_SITE_URL"]
-                config.env["ATLASSIAN_SITE_URL"] = site_url
-                # Update the --resource arg with the site URL
-                for i, arg in enumerate(config.args):
-                    if arg == "" and i > 0 and config.args[i - 1] == "--resource":
-                        config.args[i] = site_url
-                        break
-                servers.append(config)
-                logger.info(f"Atlassian Rovo MCP server configured for {site_url}")
-
-        # Check Slack
-        if os.environ.get("SLACK_BOT_TOKEN") and os.environ.get("SLACK_TEAM_ID"):
-            config = registry.get("slack")
-            if config:
-                config.env["SLACK_BOT_TOKEN"] = os.environ["SLACK_BOT_TOKEN"]
-                config.env["SLACK_TEAM_ID"] = os.environ["SLACK_TEAM_ID"]
-                servers.append(config)
-                logger.info("Slack MCP server configured")
+        # Atlassian: remote MCP via mcp-remote (auth handled by connector, not API tokens here)
+        atlassian = registry.get("atlassian")
+        if atlassian:
+            servers.append(atlassian)
+            logger.info("Atlassian MCP server configured (remote)")
 
         return servers
 
@@ -130,9 +113,8 @@ class DevAssistDaemon:
         if prompt is None:
             prompt = """Give me a morning brief. Summarize:
 1. Any important GitHub notifications, PR reviews needed, or issues assigned to me
-2. My open Jira issues and any that need immediate attention
-3. Recent Slack messages that might need my attention
-4. Any urgent items I should prioritize
+2. My open Jira issues and Confluence updates that need attention (via Atlassian)
+3. Any urgent items I should prioritize
 
 Be concise and actionable."""
 

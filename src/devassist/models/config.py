@@ -6,7 +6,21 @@ Defines application configuration structures.
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+# Vertex AI: gemini-1.5-* IDs are retired; use a current stable Flash model ID.
+DEFAULT_VERTEX_GEMINI_MODEL = "gemini-2.0-flash-001"
+
+
+def sanitize_gcp_field(value: Any) -> str:
+    """Strip whitespace and trailing junk from pasted GCP IDs (e.g. ``itpc-gcp-ai-eng-claude)``)."""
+    if value is None:
+        return ""
+    s = str(value).strip()
+    _trail_junk = frozenset({')', '"', "'", "]", "}", ">"})
+    while len(s) > 1 and s[-1] in _trail_junk:
+        s = s[:-1].rstrip()
+    return s
 
 
 class SourceConfig(BaseModel):
@@ -25,9 +39,14 @@ class AIConfig(BaseModel):
 
     project_id: str = Field("", description="GCP project ID")
     location: str = Field("us-central1", description="GCP region")
-    model: str = Field("gemini-1.5-flash", description="Model to use")
+    model: str = Field(DEFAULT_VERTEX_GEMINI_MODEL, description="Model to use")
     max_retries: int = Field(3, description="Max retry attempts")
     timeout_seconds: int = Field(60, description="Request timeout")
+
+    @field_validator("project_id", "location", "model", mode="before")
+    @classmethod
+    def _sanitize_ids(cls, v: Any) -> str:
+        return sanitize_gcp_field(v)
 
 
 class PreferencesConfig(BaseModel):

@@ -8,8 +8,6 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.panel import Panel
-from rich.text import Text
 
 from devassist import __version__
 
@@ -23,20 +21,6 @@ app = typer.Typer(
 
 # Rich console for formatted output
 console = Console()
-
-
-def show_security_warning() -> None:
-    """Display security warning about credential storage.
-
-    Per FR-004: Show security warning on startup for dev mode.
-    """
-    warning_text = Text()
-    warning_text.append("DEV MODE: ", style="bold yellow")
-    warning_text.append(
-        "Credentials are stored in plain text at ~/.devassist/config.yaml. "
-        "Do not use in production without proper secret management."
-    )
-    console.print(Panel(warning_text, title="Security Notice", border_style="yellow"))
 
 
 def version_callback(value: bool) -> None:
