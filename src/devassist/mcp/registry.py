@@ -76,7 +76,18 @@ class MCPRegistry:
             command="/opt/homebrew/bin/mcp-jira-server",
             args=[],
             env={"JIRA_BASE_URL": "", "JIRA_PAT": ""},
-            description="JIRA integration - issues, projects, sprints",
+            description="JIRA integration (legacy) - issues, projects, sprints",
+        ),
+        "atlassian": MCPServerConfig(
+            name="atlassian",
+            command="/opt/homebrew/bin/mcp-atlassian",
+            args=[],
+            env={
+                "ATLASSIAN_BASE_URL": "",
+                "ATLASSIAN_EMAIL": "",
+                "ATLASSIAN_API_TOKEN": "",
+            },
+            description="Atlassian Cloud integration - Jira issues, Confluence pages",
         ),
     }
 

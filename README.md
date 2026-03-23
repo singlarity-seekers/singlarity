@@ -1,22 +1,26 @@
-# DevAssist - Developer Assistant CLI
+# DevAssist - AI-Powered Developer Assistant
 
-A Python CLI application that aggregates context from multiple developer tools (Gmail, Slack, JIRA, GitHub) and uses AI to generate a Unified Morning Brief and other productivity features.
+A Python CLI application that aggregates context from multiple developer tools (GitHub, Jira, Slack) and uses AI to provide:
+- **Morning Briefs** - Consolidated summaries of your PRs, issues, and messages
+- **Interactive Chat** - Ask questions about your work in natural language
+- **Background Daemon** - Scheduled briefs at 8am, 1pm, and 5pm
 
 ## Features
 
-- **Unified Morning Brief**: Consolidated summary from all your communication and work tracking tools
-- **Context Source Configuration**: Easy setup for Gmail, Slack, JIRA, and GitHub integrations
-- **Preference Learning**: (Planned) Learns your priorities over time to improve relevance
-- **EC2 Sandbox Toggle**: (Planned) Start/stop development instances from the CLI
-- **Auto-Response Drafts**: (Planned) AI-generated responses with human-in-the-loop approval
-- **Quarterly Notes**: (Planned) Generate contribution summaries for performance reviews
+- **GitHub Integration** - PRs needing review, issues assigned to you, notifications
+- **Jira/Atlassian Integration** - Open issues, sprint status, recent updates
+- **Slack Integration** - Unread messages, mentions, channel activity
+- **Interactive REPL** - `devassist chat` for continuous conversation
+- **Background Daemon** - Runs in background, generates scheduled briefs
 
-## Installation
+## Quick Start
+
+### 1. Clone and Install
 
 ```bash
 # Clone the repository
-git clone https://github.com/singlarity-seekers/singlarity.git
-cd singlarity
+git clone https://github.com/ayush17/notebooks-ai-agent.git
+cd notebooks-ai-agent
 
 # Create virtual environment
 python -m venv .venv
@@ -27,55 +31,171 @@ source .venv/bin/activate  # Linux/macOS
 pip install -e ".[dev]"
 ```
 
-## Quick Start
+### 2. Install MCP Servers
 
 ```bash
-# Configure GCP for AI features (required)
-gcloud auth application-default login
-gcloud config set project YOUR_PROJECT_ID
+# GitHub MCP (required)
+npm install -g @modelcontextprotocol/server-github
 
-# Add context sources (workspace directory ~/.devassist/ is created automatically)
-# Each command will prompt for required credentials interactively
-devassist config add gmail
-devassist config add slack
-devassist config add jira
-devassist config add github
+# Atlassian MCP (for Jira/Confluence)
+npm install -g mcp-atlassian jsdom
 
-# Generate morning brief
-devassist brief
+# Slack MCP (optional)
+npm install -g @modelcontextprotocol/server-slack
+```
+
+### 3. Configure Credentials
+
+#### Option A: Interactive Setup
+```bash
+devassist setup init
+```
+
+#### Option B: Manual Configuration
+
+Create `~/.devassist/.env`:
+
+```bash
+mkdir -p ~/.devassist
+
+cat > ~/.devassist/.env << 'EOF'
+# Claude AI (via Anthropic API)
+export ANTHROPIC_API_KEY="your-anthropic-key"
+
+# OR Claude on Vertex AI (Red Hat)
+export CLAUDE_CODE_USE_VERTEX=1
+export CLOUD_ML_REGION=us-east5
+export ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project
+
+# GitHub (required)
+# Get token: https://github.com/settings/tokens
+# Scopes needed: repo, notifications, read:user
+export GITHUB_PERSONAL_ACCESS_TOKEN="ghp_xxx"
+
+# Atlassian/Jira (optional)
+# Get token: https://id.atlassian.com/manage-profile/security/api-tokens
+export ATLASSIAN_BASE_URL="https://your-site.atlassian.net"
+export ATLASSIAN_EMAIL="your-email@example.com"
+export ATLASSIAN_API_TOKEN="your-atlassian-token"
+
+# Slack (optional)
+export SLACK_BOT_TOKEN="xoxb-xxx"
+export SLACK_TEAM_ID="T027F3GAJ"
+EOF
+
+chmod 600 ~/.devassist/.env
+```
+
+### 4. Test It
+
+```bash
+# Load environment
+source ~/.devassist/.env
+
+# One-off question
+devassist ask "What PRs need my review?" -s github
+
+# Interactive chat
+devassist chat -s github,atlassian
+
+# Check status
+devassist setup status
 ```
 
 ## Usage
 
-### Morning Brief
+### Ask Command (One-off Questions)
 
 ```bash
-# Generate brief from all sources
-devassist brief
+# GitHub queries
+devassist ask "What PRs need my review?" -s github
+devassist ask "Search for PRs where I'm a reviewer using is:pr is:open review-requested:@me" -s github
 
-# Brief from specific sources
-devassist brief --sources gmail,jira
+# Jira queries
+devassist ask "What are my open Jira issues?" -s atlassian
 
-# Force refresh (ignore cache)
-devassist brief --refresh
-
-# JSON output
-devassist brief --json
+# Combined
+devassist ask "Give me a morning brief" -s github,atlassian
 ```
 
-### Configuration
+### Chat Command (Interactive REPL)
 
 ```bash
-# List configured sources
-devassist config list
-
-# Test connections
-devassist config test
-
-# Remove a source
-devassist config remove slack
+devassist chat -s github,atlassian
 ```
 
+Available commands in chat:
+- `/help` - Show help
+- `/servers` - List connected MCP servers
+- `/tools` - List available tools
+- `/clear` - Clear conversation history
+- `/quit` - Exit
+
+### Background Daemon
+
+```bash
+# Start in foreground (for testing)
+./scripts/start_daemon.sh
+
+# Start in background
+./scripts/start_daemon.sh -b
+
+# Stop daemon
+./scripts/stop_daemon.sh
+
+# View logs
+tail -f ~/.devassist/daemon.log
+
+# View latest brief
+cat ~/.devassist/briefs/latest.md
+```
+
+The daemon generates briefs at:
+- 8:00 AM
+- 1:00 PM  
+- 5:00 PM
+
+## Architecture
+
+```
+src/devassist/
+├── cli/           # Typer CLI commands (ask, chat, setup)
+├── core/          # Business logic (aggregator, ranker, brief_generator)
+├── adapters/      # Legacy adapters (gmail, slack, jira, github)
+├── mcp/           # MCP client and server registry
+├── orchestrator/  # LLM orchestration agent
+├── ai/            # Vertex AI integration
+├── preferences/   # Preference learning (planned)
+└── models/        # Pydantic data models
+```
+
+## MCP Servers
+
+| Server | Package | Purpose |
+|--------|---------|---------|
+| GitHub | `@modelcontextprotocol/server-github` | PRs, issues, repos |
+| Atlassian | `mcp-atlassian` | Jira issues, Confluence pages |
+| Slack | `@modelcontextprotocol/server-slack` | Messages, channels |
+| Jira (legacy) | `mcp-jira-server` | Self-hosted Jira |
+
+## Troubleshooting
+
+### "No MCP servers configured"
+- Run `devassist setup status` to check configuration
+- Ensure environment variables are set: `source ~/.devassist/.env`
+
+### Atlassian MCP timeout errors
+- The `mcp-atlassian` package has verbose logging that may cause timeouts
+- Try setting `NO_COLOR=1` before running
+- Jira searches may take 30-60 seconds
+
+### GitHub MCP asks for repo details
+- Use specific search syntax: "Search for PRs using is:pr is:open review-requested:@me"
+- The LLM needs guidance on GitHub search queries
+
+### Command not found: devassist
+- Ensure you've activated the venv: `source .venv/bin/activate`
+- Reinstall: `pip install -e .`
 
 ## Development
 
@@ -93,24 +213,37 @@ mypy src/
 ruff check src/
 ```
 
-## Architecture
-
-```
-src/devassist/
-├── cli/         # Typer CLI commands
-├── core/        # Business logic (aggregator, ranker, brief_generator)
-├── adapters/    # Context source adapters (gmail, slack, jira, github)
-├── ai/          # Vertex AI integration
-├── preferences/ # Preference learning
-└── models/      # Pydantic data models
-```
-
 ## Requirements
 
 - Python 3.11+
-- GCP project with Vertex AI API enabled
+- Node.js 18+ (for MCP servers)
 - API credentials for desired integrations
+- Either Anthropic API key or GCP project with Vertex AI access
+
+## Environment Variables Reference
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ANTHROPIC_API_KEY` | Yes* | Anthropic API key for Claude |
+| `CLAUDE_CODE_USE_VERTEX` | Yes* | Set to `1` for Vertex AI |
+| `ANTHROPIC_VERTEX_PROJECT_ID` | Yes* | GCP project ID for Vertex AI |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | Yes | GitHub PAT with repo, notifications scopes |
+| `ATLASSIAN_BASE_URL` | No | e.g., `https://redhat.atlassian.net` |
+| `ATLASSIAN_EMAIL` | No | Your Atlassian email |
+| `ATLASSIAN_API_TOKEN` | No | Atlassian API token |
+| `SLACK_BOT_TOKEN` | No | Slack bot token (xoxb-...) |
+| `SLACK_TEAM_ID` | No | Slack workspace ID |
+
+*Either Anthropic API key OR Vertex AI config required
 
 ## License
 
 MIT License - see LICENSE file for details.
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run tests: `pytest`
+5. Submit a pull request

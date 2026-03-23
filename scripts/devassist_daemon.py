@@ -100,6 +100,18 @@ class DevAssistDaemon:
                 servers.append(config)
                 logger.info("GitHub MCP server configured")
 
+        # Check Atlassian (Jira/Confluence)
+        if (os.environ.get("ATLASSIAN_BASE_URL") and 
+            os.environ.get("ATLASSIAN_EMAIL") and 
+            os.environ.get("ATLASSIAN_API_TOKEN")):
+            config = registry.get("atlassian")
+            if config:
+                config.env["ATLASSIAN_BASE_URL"] = os.environ["ATLASSIAN_BASE_URL"]
+                config.env["ATLASSIAN_EMAIL"] = os.environ["ATLASSIAN_EMAIL"]
+                config.env["ATLASSIAN_API_TOKEN"] = os.environ["ATLASSIAN_API_TOKEN"]
+                servers.append(config)
+                logger.info("Atlassian MCP server configured")
+
         # Check Slack
         if os.environ.get("SLACK_BOT_TOKEN") and os.environ.get("SLACK_TEAM_ID"):
             config = registry.get("slack")
@@ -116,8 +128,9 @@ class DevAssistDaemon:
         if prompt is None:
             prompt = """Give me a morning brief. Summarize:
 1. Any important GitHub notifications, PR reviews needed, or issues assigned to me
-2. Recent Slack messages that might need my attention
-3. Any urgent items I should prioritize
+2. My open Jira issues and any that need immediate attention
+3. Recent Slack messages that might need my attention
+4. Any urgent items I should prioritize
 
 Be concise and actionable."""
 

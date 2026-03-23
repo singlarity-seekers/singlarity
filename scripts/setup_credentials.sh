@@ -62,6 +62,13 @@ echo "Get Bot Token from: OAuth & Permissions > Bot User OAuth Token"
 prompt_credential "SLACK_BOT_TOKEN" "Slack Bot Token (xoxb-...):"
 prompt_credential "SLACK_TEAM_ID" "Slack Team/Workspace ID:"
 
+echo -e "\n${BLUE}=== Atlassian Configuration (Jira/Confluence) ===${NC}"
+echo "Get an API token from: https://id.atlassian.com/manage-profile/security/api-tokens"
+echo "Site name is the subdomain of your Atlassian URL (e.g., 'redhat' for redhat.atlassian.net)"
+prompt_credential "ATLASSIAN_SITE_NAME" "Atlassian Site Name (e.g., redhat):"
+prompt_credential "ATLASSIAN_USER_EMAIL" "Atlassian User Email:"
+prompt_credential "ATLASSIAN_API_TOKEN" "Atlassian API Token:"
+
 echo -e "\n${BLUE}=== LLM Configuration ===${NC}"
 echo "Choose your LLM provider:"
 echo "  1) Anthropic (Claude) - Recommended"
@@ -91,6 +98,11 @@ export GITHUB_PERSONAL_ACCESS_TOKEN="$GITHUB_PERSONAL_ACCESS_TOKEN"
 # Slack
 export SLACK_BOT_TOKEN="$SLACK_BOT_TOKEN"
 export SLACK_TEAM_ID="$SLACK_TEAM_ID"
+
+# Atlassian (Jira/Confluence)
+export ATLASSIAN_SITE_NAME="$ATLASSIAN_SITE_NAME"
+export ATLASSIAN_USER_EMAIL="$ATLASSIAN_USER_EMAIL"
+export ATLASSIAN_API_TOKEN="$ATLASSIAN_API_TOKEN"
 
 # LLM Provider
 export LLM_PROVIDER="$LLM_PROVIDER"
@@ -126,6 +138,17 @@ if [ -n "$SLACK_BOT_TOKEN" ]; then
     fi
 fi
 
+if [ -n "$ATLASSIAN_API_TOKEN" ] && [ -n "$ATLASSIAN_SITE_NAME" ] && [ -n "$ATLASSIAN_USER_EMAIL" ]; then
+    echo -n "  Atlassian: "
+    if curl -s -u "$ATLASSIAN_USER_EMAIL:$ATLASSIAN_API_TOKEN" "https://$ATLASSIAN_SITE_NAME.atlassian.net/rest/api/3/myself" | grep -q '"accountId"'; then
+        echo -e "${GREEN}✓ Connected${NC}"
+    else
+        echo -e "${RED}✗ Failed${NC}"
+    fi
+fi
+
 echo -e "\n${GREEN}Setup complete!${NC}"
 echo -e "To start DevAssist, run:"
-echo -e "  ${BLUE}source ~/.devassist/.env && devassist ask 'your question' -s github,slack${NC}"
+echo -e "  ${BLUE}source ~/.devassist/.env && devassist ask 'your question' -s github,atlassian${NC}"
+echo -e "\nOr start an interactive chat session:"
+echo -e "  ${BLUE}source ~/.devassist/.env && devassist chat -s github,atlassian${NC}"

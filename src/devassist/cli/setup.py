@@ -57,7 +57,12 @@ def save_config(config: dict[str, str]) -> None:
             "ANTHROPIC_VERTEX_PROJECT_ID",
         ],
         "GitHub": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
-        "JIRA": ["JIRA_BASE_URL", "JIRA_PAT"],
+        "JIRA (Legacy)": ["JIRA_BASE_URL", "JIRA_PAT"],
+        "Atlassian (Jira/Confluence)": [
+            "ATLASSIAN_BASE_URL",
+            "ATLASSIAN_EMAIL",
+            "ATLASSIAN_API_TOKEN",
+        ],
         "Slack": ["SLACK_BOT_TOKEN", "SLACK_TEAM_ID"],
     }
     
@@ -154,15 +159,48 @@ def init():
         elif current_github:
             console.print("   [green]✓[/green] Keeping existing GitHub token")
     
-    # === JIRA ===
-    console.print("\n[bold cyan]3. JIRA Configuration[/bold cyan]")
-    console.print("   For Red Hat: https://issues.redhat.com")
+    # === Atlassian (Jira Cloud/Confluence) ===
+    console.print("\n[bold cyan]3. Atlassian Configuration (Jira Cloud/Confluence)[/bold cyan]")
+    console.print("   For Atlassian Cloud (e.g., redhat.atlassian.net)")
+    console.print("   Create an API token at: https://id.atlassian.com/manage-profile/security/api-tokens\n")
+    
+    current_atlassian_url = config.get("ATLASSIAN_BASE_URL", "")
+    current_atlassian_email = config.get("ATLASSIAN_EMAIL", "")
+    current_atlassian_token = config.get("ATLASSIAN_API_TOKEN", "")
+    
+    if Confirm.ask("   Configure Atlassian (Jira/Confluence)?", default=True):
+        atlassian_url = Prompt.ask(
+            "   Enter Atlassian base URL (e.g., https://redhat.atlassian.net)",
+            default=current_atlassian_url or "https://redhat.atlassian.net"
+        )
+        config["ATLASSIAN_BASE_URL"] = atlassian_url
+        
+        atlassian_email = Prompt.ask(
+            "   Enter your Atlassian email",
+            default=current_atlassian_email
+        )
+        config["ATLASSIAN_EMAIL"] = atlassian_email
+        
+        atlassian_token = Prompt.ask(
+            "   Enter your Atlassian API Token",
+            password=True,
+            default=""
+        )
+        if atlassian_token:
+            config["ATLASSIAN_API_TOKEN"] = atlassian_token
+            console.print("   [green]✓[/green] Atlassian configured")
+        elif current_atlassian_token:
+            console.print("   [green]✓[/green] Keeping existing Atlassian token")
+    
+    # === JIRA (Legacy - for self-hosted) ===
+    console.print("\n[bold cyan]4. JIRA Configuration (Legacy - for self-hosted)[/bold cyan]")
+    console.print("   For self-hosted JIRA (e.g., https://issues.redhat.com)")
     console.print("   Create a PAT in JIRA: Profile → Personal Access Tokens\n")
     
     current_jira_url = config.get("JIRA_BASE_URL", "")
     current_jira_pat = config.get("JIRA_PAT", "")
     
-    if Confirm.ask("   Configure JIRA?", default=True):
+    if Confirm.ask("   Configure legacy JIRA?", default=False):
         jira_url = Prompt.ask(
             "   Enter JIRA base URL",
             default=current_jira_url or "https://issues.redhat.com"
@@ -181,7 +219,7 @@ def init():
             console.print("   [green]✓[/green] Keeping existing JIRA token")
     
     # === Slack (Optional) ===
-    console.print("\n[bold cyan]4. Slack Configuration (Optional)[/bold cyan]")
+    console.print("\n[bold cyan]5. Slack Configuration (Optional)[/bold cyan]")
     console.print("   Requires a Slack App with appropriate scopes.\n")
     
     if Confirm.ask("   Configure Slack?", default=False):
@@ -212,10 +250,12 @@ def init():
     
     # === Summary ===
     console.print(Panel.fit(
-        "[bold green]✅ Setup Complete![/bold green]\n\n"
+        "[bold green]Setup Complete![/bold green]\n\n"
         "To use DevAssist, run:\n"
         f"  [cyan]source {env_file}[/cyan]\n"
-        "  [cyan]devassist ask \"Give me a morning brief\" -s jira,github[/cyan]\n\n"
+        "  [cyan]devassist ask \"Give me a morning brief\" -s atlassian,github[/cyan]\n\n"
+        "Or start an interactive chat session:\n"
+        "  [cyan]devassist chat -s atlassian,github[/cyan]\n\n"
         "Or add to your ~/.zshrc:\n"
         f"  [dim]source {env_file}[/dim]",
         border_style="green"
@@ -236,7 +276,8 @@ def status():
         ("Claude AI (Vertex)", config.get("CLAUDE_CODE_USE_VERTEX") == "1" and config.get("ANTHROPIC_VERTEX_PROJECT_ID")),
         ("Claude AI (Direct)", config.get("ANTHROPIC_API_KEY")),
         ("GitHub", config.get("GITHUB_PERSONAL_ACCESS_TOKEN")),
-        ("JIRA", config.get("JIRA_BASE_URL") and config.get("JIRA_PAT")),
+        ("Atlassian", config.get("ATLASSIAN_BASE_URL") and config.get("ATLASSIAN_EMAIL") and config.get("ATLASSIAN_API_TOKEN")),
+        ("JIRA (Legacy)", config.get("JIRA_BASE_URL") and config.get("JIRA_PAT")),
         ("Slack", config.get("SLACK_BOT_TOKEN") and config.get("SLACK_TEAM_ID")),
     ]
     
@@ -266,6 +307,7 @@ def check_and_prompt_setup() -> bool:
     )
     has_source = (
         config.get("GITHUB_PERSONAL_ACCESS_TOKEN")
+        or (config.get("ATLASSIAN_BASE_URL") and config.get("ATLASSIAN_EMAIL") and config.get("ATLASSIAN_API_TOKEN"))
         or (config.get("JIRA_BASE_URL") and config.get("JIRA_PAT"))
     )
     
